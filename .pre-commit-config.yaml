@@ -1,0 +1,35 @@
+# https://pre-commit.com — install with: pip install pre-commit && pre-commit install
+# Hook on every commit; mirrors what the Makefile `check` target does, faster feedback.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Cross-check staged paths against the trigger index in AGENTS.md.
+  # A path that fires a trigger (per scripts/check_consulted_rules.sh's case
+  # ladder, generated from the interview flags) must be named in the committed
+  # prompt file's `## Consulted rules` section. Soft-skips when no prompt file
+  # is staged or on disk. Bash — Linux/macOS/WSL; Windows-native needs Git Bash.
+  - repo: local
+    hooks:
+      - id: check-consulted-rules
+        name: Trigger index — staged paths must name their rules in the prompt file
+        entry: bash scripts/check_consulted_rules.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

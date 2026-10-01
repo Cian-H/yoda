@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-bootstrap.json",
+  "bootstrap_version": "2026-09-16",
+  "last_run_at": "2026-10-01T16:43:40+01:00",
+  "interview_status": "done",
+  "answers": {
+    "PROJECT_NAME": "yoda",
+    "ONE_LINE_PURPOSE": "Experimental custom system 1 decision engine architecture.",
+    "AGENTS_USED": [
+      "OPENCODE"
+    ],
+    "LAYOUT": "agents",
+    "POSTURE": "TRUSTED_DEV",
+    "LANG": "Python",
+    "ARCH": "FLAT",
+    "WEB": false,
+    "LLM": true,
+    "ENV_VARS": true,
+    "CHANGES": false,
+    "UI_COMPONENTS": false,
+    "METRICS": false,
+    "TESTING": true,
+    "FRONTEND": false,
+    "BEST_PRACTICES_REFINED": true,
+    "LICENSE": "APACHE_2_0",
+    "COPYRIGHT_HOLDER": "Cian Hughes",
+    "CONTRIB": false,
+    "RUN_INSTRUCTIONS": "devenv shell (or uv sync); uv run pytest -o pythonpath=src; uv run ruff check .; uv run marimo edit notebooks/workbench.py",
+    "ADDITIONAL_SECTIONS_FROM_INTERVIEW": "Neuro-symbolic decision engine (NeSy logic constraints + continuous LTN/Kleene relaxations, transformer embeddings, uncertainty quantification, XAI decision traces; benchmarks against Jev/Laya/CLM/Julia-1; nix/devenv GPU environment)"
+  }
+}
