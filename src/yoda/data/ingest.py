@@ -260,6 +260,30 @@ class DatasetIngestionPipeline:
         return fallback if fallback is not None else data
 
     @classmethod
+    def _try_parse_json_dict(cls, text: str) -> dict[str, Any] | None:
+        if not (text.startswith("{") and text.endswith("}")):
+            return None
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    @classmethod
+    def _try_parse_jsonl_events(cls, text: str) -> dict[str, Any] | None:
+        if not (("\n" in text or "\\n" in text) and text.startswith("{")):
+            return None
+        try:
+            lines = [
+                json.loads(line)
+                for line in text.replace("\\n", "\n").splitlines()
+                if line.strip().startswith("{")
+            ]
+            return {"events": lines} if lines else None
+        except json.JSONDecodeError:
+            return None
+
+    @classmethod
     def _normalize_state(cls, raw_state: Any) -> dict[str, Any]:
         """Normalizes state payload to a dictionary representation."""
         if isinstance(raw_state, dict):
@@ -268,26 +292,17 @@ class DatasetIngestionPipeline:
             return {"dialogue_or_list": raw_state}
         if isinstance(raw_state, str):
             text = raw_state.strip()
-            if text.startswith("{") and text.endswith("}"):
-                try:
-                    parsed = json.loads(text)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except Exception:
-                    pass
-            if ("\\n" in text or "\n" in text) and text.startswith("{"):
-                try:
-                    norm = text.replace("\\n", "\n")
-                    lines = [
-                        json.loads(line)
-                        for line in norm.splitlines()
-                        if line.strip().startswith("{")
-                    ]
-                    if lines:
-                        return {"events": lines}
-                except Exception:
-                    pass
+
+            parsed_dict = cls._try_parse_json_dict(text)
+            if parsed_dict is not None:
+                return parsed_dict
+
+            parsed_events = cls._try_parse_jsonl_events(text)
+            if parsed_events is not None:
+                return parsed_events
+
             return {"text": raw_state}
+
         return {"raw": str(raw_state)}
 
     @staticmethod
@@ -549,90 +564,130 @@ class DatasetIngestionPipeline:
             count += 1
         return count
 
-    def _stream_nimble(self, f_train: Any, f_eval: Any) -> tuple[int, int]:
+    def _stream_datasets(self, f_train: Any, f_eval: Any) -> tuple[int, int]:
         train_count, eval_count = 0, 0
-        nimble_train_path = self.raw_nimble / "train.jsonl"
-        if nimble_train_path.exists():
-            with open(nimble_train_path, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        train_count += self._write_payloads(
-                            self.parse_nimble_record(json.loads(line)), f_train
-                        )
-        nimble_eval_path = self.raw_nimble / "eval.jsonl"
-        if nimble_eval_path.exists():
-            with open(nimble_eval_path, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        eval_count += self._write_payloads(
-                            self.parse_nimble_record(json.loads(line)), f_eval
-                        )
-        return train_count, eval_count
 
-    def _stream_kev(self, f_train: Any, f_eval: Any) -> tuple[int, int]:
-        train_count, eval_count = 0, 0
-        kev_mappings = [
-            (self.raw_kev / "decision_v1_train.jsonl", f_train, "v1_train", True),
-            (self.raw_kev / "decision_v1_test.jsonl", f_eval, "v1_test", False),
-            (self.raw_kev / "decision_v2_train.jsonl", f_train, "v2_train", True),
-            (self.raw_kev / "decision_v2_test.jsonl", f_eval, "v2_test", False),
+        # Format: (path, target_file, is_train, format, parse_fn, *args)
+        tasks = [
+            # Nimble
+            (self.raw_nimble / "train.jsonl", f_train, True, "jsonl", self.parse_nimble_record),
+            (self.raw_nimble / "eval.jsonl", f_eval, False, "jsonl", self.parse_nimble_record),
+            # Kev
+            (
+                self.raw_kev / "decision_v1_train.jsonl",
+                f_train,
+                True,
+                "jsonl",
+                self.parse_kev_record,
+                "v1_train",
+            ),
+            (
+                self.raw_kev / "decision_v1_test.jsonl",
+                f_eval,
+                False,
+                "jsonl",
+                self.parse_kev_record,
+                "v1_test",
+            ),
+            (
+                self.raw_kev / "decision_v2_train.jsonl",
+                f_train,
+                True,
+                "jsonl",
+                self.parse_kev_record,
+                "v2_train",
+            ),
+            (
+                self.raw_kev / "decision_v2_test.jsonl",
+                f_eval,
+                False,
+                "jsonl",
+                self.parse_kev_record,
+                "v2_test",
+            ),
+            # Dwidlee
+            (
+                self.raw_dwidlee_gen / "train.parquet",
+                f_train,
+                True,
+                "parquet",
+                self.parse_dwidlee_row,
+                "dwidlee_gen",
+            ),
+            (
+                self.raw_dwidlee_gen / "test.parquet",
+                f_eval,
+                False,
+                "parquet",
+                self.parse_dwidlee_row,
+                "dwidlee_gen",
+            ),
+            (
+                self.raw_dwidlee_p2 / "train.parquet",
+                f_train,
+                True,
+                "parquet",
+                self.parse_dwidlee_row,
+                "dwidlee_p2",
+            ),
+            (
+                self.raw_dwidlee_p2 / "test.parquet",
+                f_eval,
+                False,
+                "parquet",
+                self.parse_dwidlee_row,
+                "dwidlee_p2",
+            ),
+            # N4ze3m
+            (self.raw_n4ze3m / "train.jsonl", f_train, True, "jsonl", self.parse_n4ze3m_record),
+            (
+                self.raw_n4ze3m / "validation.jsonl",
+                f_eval,
+                False,
+                "jsonl",
+                self.parse_n4ze3m_record,
+            ),
+            # Mghafiri
+            (
+                self.raw_mghafiri / "train.jsonl",
+                f_train,
+                True,
+                "jsonl",
+                self.parse_mghafiri_record,
+            ),
+            (
+                self.raw_mghafiri / "validation.jsonl",
+                f_eval,
+                False,
+                "jsonl",
+                self.parse_mghafiri_record,
+            ),
+            (self.raw_mghafiri / "test.jsonl", f_eval, False, "jsonl", self.parse_mghafiri_record),
         ]
-        for pth, target_file, tag, is_train in kev_mappings:
+
+        for pth, target_file, is_train, fmt, parse_fn, *args in tasks:
             if not pth.exists():
                 continue
-            with open(pth, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        c = self._write_payloads(
-                            self.parse_kev_record(json.loads(line), tag), target_file
-                        )
-                        if is_train:
-                            train_count += c
-                        else:
-                            eval_count += c
-        return train_count, eval_count
 
-    def _stream_dwidlee(self, f_train: Any, f_eval: Any) -> tuple[int, int]:
-        train_count, eval_count = 0, 0
-        dwidlee_mappings = [
-            (self.raw_dwidlee_gen / "train.parquet", f_train, "dwidlee_gen", True),
-            (self.raw_dwidlee_gen / "test.parquet", f_eval, "dwidlee_gen", False),
-            (self.raw_dwidlee_p2 / "train.parquet", f_train, "dwidlee_p2", True),
-            (self.raw_dwidlee_p2 / "test.parquet", f_eval, "dwidlee_p2", False),
-        ]
-        for pth, target_file, tag, is_train in dwidlee_mappings:
-            if not pth.exists():
-                continue
-            df = pl.read_parquet(pth)
-            for row in df.iter_rows(named=True):
-                p = self.parse_dwidlee_row(row, tag)
-                target_file.write(p.model_dump_json() + "\n")
-                if is_train:
-                    train_count += 1
-                else:
-                    eval_count += 1
-        return train_count, eval_count
+            c = 0
+            if fmt == "jsonl":
+                with open(pth, encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            parsed = parse_fn(json.loads(line), *args)
+                            c += self._write_payloads(parsed, target_file)
+            elif fmt == "parquet":
+                df = pl.read_parquet(pth)
+                for row in df.iter_rows(named=True):
+                    payload = parse_fn(row, *args)
+                    target_file.write(payload.model_dump_json() + "\n")
+                    c += 1
 
-    def _stream_synth_and_scenarios(self, f_train: Any, f_eval: Any) -> tuple[int, int]:
-        train_count, eval_count = 0, 0
-        jsonl_mappings = [
-            (self.raw_n4ze3m / "train.jsonl", f_train, self.parse_n4ze3m_record, True),
-            (self.raw_n4ze3m / "validation.jsonl", f_eval, self.parse_n4ze3m_record, False),
-            (self.raw_mghafiri / "train.jsonl", f_train, self.parse_mghafiri_record, True),
-            (self.raw_mghafiri / "validation.jsonl", f_eval, self.parse_mghafiri_record, False),
-            (self.raw_mghafiri / "test.jsonl", f_eval, self.parse_mghafiri_record, False),
-        ]
-        for pth, target_file, parse_fn, is_train in jsonl_mappings:
-            if not pth.exists():
-                continue
-            with open(pth, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        c = self._write_payloads(parse_fn(json.loads(line)), target_file)
-                        if is_train:
-                            train_count += c
-                        else:
-                            eval_count += c
+            if is_train:
+                train_count += c
+            else:
+                eval_count += c
+
         return train_count, eval_count
 
     def process_and_aggregate(self) -> dict[str, int]:
@@ -643,22 +698,10 @@ class DatasetIngestionPipeline:
         train_out = self.processed_dir / "aggregated_train.jsonl"
         eval_out = self.processed_dir / "aggregated_eval.jsonl"
 
-        train_count = 0
-        eval_count = 0
-
         with open(train_out, "w", encoding="utf-8") as f_train, open(
             eval_out, "w", encoding="utf-8"
         ) as f_eval:
-            streamers = [
-                self._stream_nimble,
-                self._stream_kev,
-                self._stream_dwidlee,
-                self._stream_synth_and_scenarios,
-            ]
-            for streamer in streamers:
-                t_c, e_c = streamer(f_train, f_eval)
-                train_count += t_c
-                eval_count += e_c
+            train_count, eval_count = self._stream_datasets(f_train, f_eval)
 
         manifest = {
             "version": "2.0.0",
