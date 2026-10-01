@@ -91,10 +91,16 @@ def test_parse_kev_record() -> None:
     assert p1.metadata["target"] is False
 
 
-def test_rejected_datasets_audit(tmp_path: Path) -> None:
-    """Verifies that rejected datasets are recorded with explicit rejection rationales."""
+def test_dataset_audit_postures(tmp_path: Path) -> None:
+    """Verifies accepted datasets have documented postures and rejected datasets are flagged."""
     pipeline = DatasetIngestionPipeline(data_root=tmp_path)
+    accepted = pipeline.ACCEPTED_DATASETS
     rejected = pipeline.REJECTED_DATASETS
+
+    assert "kev" in accepted
+    assert accepted["kev"]["license"] == "Apache-2.0"
+    assert "nimble" in accepted
+    assert "research-fair-use" in accepted["nimble"]["posture"]
 
     assert "tasksource" in rejected
     assert "roskosmos19" in rejected

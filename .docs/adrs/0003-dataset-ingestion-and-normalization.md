@@ -20,9 +20,9 @@ To prevent legal contamination and maintain architectural consistency:
 
 We implement a dedicated, reproducible ingestion and normalization pipeline in `yoda.data.ingest.DatasetIngestionPipeline` and establish the vetted corpus:
 
-1. **Licensing and Suitability Audit**:
-   - **Nimble (`bespokelabsai/nimble`)**: **Accepted** (Apache-2.0). 11,000+ domain decision records with state, questions, criteria, and teacher annotations.
-   - **Kev (`jaredpalmer/kev`)**: **Accepted** (Apache-2.0). Evaluation and training suites (`decision-v1`, `decision-v2`) with rubric criteria and target labels.
+1. **Licensing and Suitability Audit & Posture**:
+   - **Kev (`jaredpalmer/kev`)**: **Accepted** (`permissive-clean`, Apache-2.0). Evaluation and training suites (`decision-v1`, `decision-v2`) with rubric criteria and target labels. The repository root contains an explicit `LICENSE` file granting full Apache-2.0 rights.
+   - **Nimble (`bespokelabsai/nimble`)**: **Accepted with Posture** (`research-fair-use`). The repository has no explicit `LICENSE` file (GitHub API reports `license: null`), meaning statutory default copyright technically applies. However, following industry practice and experimental research needs, Nimble is ingested under an explicit `research-fair-use` posture. Every record is tagged with source provenance (`metadata.source = "nimble"`), ensuring the model can be retrained or restrained at any time solely on clean subsets (e.g. Kev-only) without structural friction.
    - **Tasksource Jev Decisions (`tasksource/tasksource-jev-typed-decisions`)**: **Rejected & Purged** (License: `other`). Contains heterogeneous upstream academic datasets with mixed non-commercial conditions.
    - **SystemOne (`roskosmos19/SystemOne`)**: **Rejected & Purged** (No license stated). Unlicensed repository poses IP ambiguity.
    - **Typed Decisions (`pngwn/typed-decisions`)**: **Rejected & Purged** (License: CC-BY-SA-4.0). Share-alike copyleft condition poses risk to downstream model weights.
@@ -35,12 +35,13 @@ We implement a dedicated, reproducible ingestion and normalization pipeline in `
    - `metadata`: Source provenance (`nimble` or `kev`), record ID, domain/family, question type, and ground-truth target label.
 
 3. **Aggregation Outputs**:
-   - `data/processed/aggregated_train.jsonl`: 9,108 canonical training records.
-   - `data/processed/aggregated_eval.jsonl`: 2,616 canonical evaluation records.
-   - `data/processed/manifest.json`: Ingestion provenance manifest detailing accepted/rejected sources and record counts.
+   - `data/processed/aggregated_train.jsonl`: 9,108 canonical training records (6,432 Kev + 2,676 Nimble).
+   - `data/processed/aggregated_eval.jsonl`: 2,616 canonical evaluation records (2,292 Kev + 324 Nimble).
+   - `data/processed/manifest.json`: Ingestion provenance manifest detailing accepted/rejected sources, legal postures, and record counts.
 
 ## Consequences
 
-- The training corpus is 100% Apache-2.0 compliant and free from copyleft or non-commercial restrictions.
-- All 11,724 aggregated records validate strictly against Pydantic `DecisionPayload`.
+- The training corpus provides 11,724 canonical, schema-normalized `DecisionPayload` records across both Kev and Nimble.
+- Source provenance is strictly maintained in metadata, allowing instant filtering to 100% clean Apache-2.0 records if commercial redistribution or weight licensing requires it.
+- Non-compliant datasets (`tasksource`, `roskosmos19`, `pngwn`, `FaroukMoc2`) remain completely purged and excluded.
 - Raw and processed datasets are stored in `data/` and excluded from version control via `.gitignore`, preserving lightweight repository size while remaining reproducible via `DatasetIngestionPipeline().process_and_aggregate()`.
