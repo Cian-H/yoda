@@ -7,6 +7,7 @@
 }: {
   packages = [
     pkgs.git
+    pkgs.just
     pkgs.marimo
     pkgs.ruff
   ];
