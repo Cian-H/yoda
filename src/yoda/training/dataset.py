@@ -53,6 +53,12 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         if target is None or not raw_constraints:
             return None
 
+        # Handle probability distribution targets (e.g. {"rbp": 0.912, "ma": 0.034})
+        if isinstance(target, dict):
+            if not target:
+                return None
+            target = max(target.items(), key=lambda kv: kv[1])[0]
+
         target_str = str(target).strip()
 
         # 1. Exact match or prefix match before colon (e.g. "A1" matches "A1: Option A1")
