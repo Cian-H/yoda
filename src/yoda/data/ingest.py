@@ -24,13 +24,15 @@ class DatasetIngestionPipeline:
     KEV_BASE_URL: str = "https://raw.githubusercontent.com/jaredpalmer/kev/main/evals"
 
     ACCEPTED_DATASETS: ClassVar[dict[str, dict[str, str]]] = {
-        "nimble": {
-            "license": "Apache-2.0",
-            "repo": "https://github.com/bespokelabsai/nimble",
-        },
         "kev": {
             "license": "Apache-2.0",
             "repo": "https://github.com/jaredpalmer/kev",
+            "posture": "permissive-clean",
+        },
+        "nimble": {
+            "license": "unlicensed-research-fair-use",
+            "repo": "https://github.com/bespokelabsai/nimble",
+            "posture": "research-fair-use (experimental; retrainable on clean subset)",
         },
     }
 
@@ -89,7 +91,7 @@ class DatasetIngestionPipeline:
         """Fetches all vetted raw source files for Nimble and Kev."""
         files: dict[str, list[Path]] = {"nimble": [], "kev": []}
 
-        # Nimble train and eval
+        # Nimble train and eval (research / experimental posture)
         nimble_train = self.download_file(
             f"{self.NIMBLE_BASE_URL}/train.jsonl",
             self.raw_nimble / "train.jsonl",
@@ -100,7 +102,7 @@ class DatasetIngestionPipeline:
         )
         files["nimble"].extend([nimble_train, nimble_eval])
 
-        # Kev decision suites
+        # Kev decision suites (Apache-2.0 clean posture)
         kev_v1_train = self.download_file(
             f"{self.KEV_BASE_URL}/decision-v1/train.jsonl",
             self.raw_kev / "decision_v1_train.jsonl",
@@ -264,27 +266,29 @@ class DatasetIngestionPipeline:
         train_payloads: list[DecisionPayload] = []
         eval_payloads: list[DecisionPayload] = []
 
-        # 1. Process Nimble train
+        # 1. Process Nimble train (research posture)
         nimble_train_path = self.raw_nimble / "train.jsonl"
-        with open(nimble_train_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                train_payloads.extend(self.parse_nimble_record(row))
+        if nimble_train_path.exists():
+            with open(nimble_train_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    train_payloads.extend(self.parse_nimble_record(row))
 
-        # 2. Process Nimble eval
+        # 2. Process Nimble eval (research posture)
         nimble_eval_path = self.raw_nimble / "eval.jsonl"
-        with open(nimble_eval_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                eval_payloads.extend(self.parse_nimble_record(row))
+        if nimble_eval_path.exists():
+            with open(nimble_eval_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    eval_payloads.extend(self.parse_nimble_record(row))
 
-        # 3. Process Kev decision-v1 and v2
+        # 3. Process Kev decision-v1 and v2 (Apache-2.0 clean posture)
         kev_mappings = [
             (self.raw_kev / "decision_v1_train.jsonl", train_payloads, "v1_train"),
             (self.raw_kev / "decision_v1_test.jsonl", eval_payloads, "v1_test"),
