@@ -52,12 +52,28 @@ class BelnapDecisionHead(nn.Module):
         self.w_pos = nn.Linear(d_model, num_choices, device=device, dtype=dtype)
         self.w_neg = nn.Linear(d_model, num_choices, device=device, dtype=dtype)
 
-    def forward(self, x: BelnapState) -> dict[str, torch.Tensor]:
+        # Bilinear candidate evidence scoring projections
+        self.cand_query_pos = nn.Linear(d_model, d_model, device=device, dtype=dtype)
+        self.cand_query_neg = nn.Linear(d_model, d_model, device=device, dtype=dtype)
+        self.cand_opt_pos = nn.Linear(d_model, d_model, device=device, dtype=dtype)
+        self.cand_opt_neg = nn.Linear(d_model, d_model, device=device, dtype=dtype)
+
+    def forward(
+        self,
+        x: BelnapState,
+        candidate_states: BelnapState | None = None,
+    ) -> dict[str, torch.Tensor]:
         """Projects dual evidence states into decision logits and coordinates.
+
+        If candidate_states is provided (shape: [batch_size, num_choices, d_model]),
+        computes pairwise candidate-level alignment scores to eliminate static index bias.
+        Otherwise falls back to linear projection heads over pooled evidence.
 
         Args:
             x: Input BelnapState of shape `(batch_size, num_queries, d_model)` or
                 `(batch_size, d_model)`.
+            candidate_states: Optional per-candidate BelnapState of shape
+                `(batch_size, num_choices, d_model)`.
 
         Returns:
             Dictionary containing:
@@ -74,8 +90,22 @@ class BelnapDecisionHead(nn.Module):
             pooled_pos = x.e_pos
             pooled_neg = x.e_neg
 
-        choice_pos = torch.sigmoid(self.w_pos(pooled_pos))
-        choice_neg = torch.sigmoid(self.w_neg(pooled_neg))
+        if candidate_states is not None:
+            # Pairwise candidate alignment scoring
+            q_p = self.cand_query_pos(pooled_pos).unsqueeze(1)  # [B, 1, D]
+            q_n = self.cand_query_neg(pooled_neg).unsqueeze(1)  # [B, 1, D]
+            c_p = self.cand_opt_pos(candidate_states.e_pos)     # [B, num_choices, D]
+            c_n = self.cand_opt_neg(candidate_states.e_neg)     # [B, num_choices, D]
+
+            scale = (self.d_model ** 0.5)
+            pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale
+            neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale
+
+            choice_pos = torch.sigmoid(pos_affinity)
+            choice_neg = torch.sigmoid(neg_affinity)
+        else:
+            choice_pos = torch.sigmoid(self.w_pos(pooled_pos))
+            choice_neg = torch.sigmoid(self.w_neg(pooled_neg))
 
         choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
         truth = choice_state.truth
@@ -233,5 +263,6 @@ class YodaDecisionEngine(nn.Module):
         reasoning = self.context_reasoning(x=q_state, context=c_state)
         reasoning = self.constraint_reasoning(x=reasoning, context=k_state)
 
-        # 4. Judgment
-        return self.decision_head(reasoning)
+        # 4. Judgment (Pairwise candidate alignment if constraint probes match num_choices)
+        cand_states = k_state if k_state.e_pos.size(1) == self.num_choices else None
+        return self.decision_head(reasoning, candidate_states=cand_states)
