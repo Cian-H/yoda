@@ -45,7 +45,20 @@ check-rules:
     declare -A needs=()
     for path in "${staged[@]}"; do
       case "$path" in
-        *) ;;
+        *.py)
+          needs["best-practices.md"]=1
+          ;;
+      esac
+      case "$path" in
+        src/yoda/*.py)
+          needs["workflow-testing.md"]=1
+          ;;
+        .docs/todos/*.md)
+          needs["workflow-todos.md"]=1
+          ;;
+        .docs/adrs/[0-9]*.md)
+          needs["workflow.md"]=1
+          ;;
       esac
     done
     if [ ${#needs[@]} -eq 0 ]; then exit 0; fi
