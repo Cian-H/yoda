@@ -99,18 +99,25 @@ def main() -> None:
         embed_dim=args.embed_dim,
         num_q_probes=4,
         num_c_probes=8,
-        num_k_probes=4,
+        num_k_probes=args.num_choices,
         num_choices=args.num_choices,
         n_heads=4,
         device=device,
     )
     model = model.to(device)
 
-    # Optionally freeze pretrained backbone to conserve memory and speed up Belnap adaptation
-    if args.freeze_backbone and hasattr(model.text_encoder, "model") and model.text_encoder.model is not None:
-        for param in model.text_encoder.model.parameters():
-            param.requires_grad = False
-        logger.info("Froze pretrained transformer backbone weights")
+    # If freeze_backbone is True, unfreeze only the last layer of the text encoder for fine adaptation
+    if hasattr(model.text_encoder, "model") and model.text_encoder.model is not None:
+        if args.freeze_backbone:
+            for param in model.text_encoder.model.parameters():
+                param.requires_grad = False
+            # Unfreeze the last transformer layer of MiniLM for semantic domain adaptation
+            if hasattr(model.text_encoder.model, "encoder") and hasattr(model.text_encoder.model.encoder, "layer"):
+                for param in model.text_encoder.model.encoder.layer[-1].parameters():
+                    param.requires_grad = True
+                logger.info("Froze text backbone except the top transformer layer for domain adaptation")
+            else:
+                logger.info("Froze pretrained transformer backbone weights")
 
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
