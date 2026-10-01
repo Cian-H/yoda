@@ -1,5 +1,5 @@
 # https://pre-commit.com — install with: pip install pre-commit && pre-commit install
-# Hook on every commit; mirrors what the Makefile `check` target does, faster feedback.
+# Hook on every commit; mirrors what the justfile `check` target does, faster feedback.
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -20,16 +20,15 @@ repos:
     hooks:
       - id: gitleaks
 
-  # Cross-check staged paths against the trigger index in AGENTS.md.
-  # A path that fires a trigger (per scripts/check_consulted_rules.sh's case
-  # ladder, generated from the interview flags) must be named in the committed
+  # Cross-check staged paths against the trigger index in agents.md.
+  # A path that fires a trigger must be named in the committed
   # prompt file's `## Consulted rules` section. Soft-skips when no prompt file
-  # is staged or on disk. Bash — Linux/macOS/WSL; Windows-native needs Git Bash.
+  # is staged or on disk.
   - repo: local
     hooks:
       - id: check-consulted-rules
         name: Trigger index — staged paths must name their rules in the prompt file
-        entry: bash scripts/check_consulted_rules.sh
+        entry: just check-rules
         language: system
         pass_filenames: false
         stages: [pre-commit]
