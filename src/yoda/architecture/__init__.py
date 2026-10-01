@@ -16,10 +16,15 @@ from yoda.architecture.encoders import (
     SymbolicStateEncoder,
     TextEncoder,
 )
+from yoda.architecture.engine import (
+    BelnapDecisionHead,
+    YodaDecisionEngine,
+)
 from yoda.architecture.schema import DecisionPayload, QueryContext
 
 __all__: list[str] = [
     "BelnapAttention",
+    "BelnapDecisionHead",
     "BelnapDecisionTransformer",
     "BelnapFFN",
     "BelnapMultiheadPooledAttention",
@@ -31,4 +36,5 @@ __all__: list[str] = [
     "QueryContext",
     "SymbolicStateEncoder",
     "TextEncoder",
+    "YodaDecisionEngine",
 ]

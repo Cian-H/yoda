@@ -17,6 +17,11 @@ from yoda.probabilistic.belnap import (
     BelnapEvidence,
     FuzzyBelnapLoss,
 )
+from yoda.training import (
+    YodaDecisionDataset,
+    YodaTrainer,
+    collate_decision_batch,
+)
 
 __all__: list[str] = [
     "BelnapAttention",
@@ -31,4 +36,7 @@ __all__: list[str] = [
     "FuzzyBelnapLoss",
     "MultiheadPooledAttention",
     "QueryContext",
+    "YodaDecisionDataset",
+    "YodaTrainer",
+    "collate_decision_batch",
 ]

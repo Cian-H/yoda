@@ -16,6 +16,7 @@ import pytest
         "yoda.architecture.schema",
         "yoda.nesy",
         "yoda.probabilistic",
+        "yoda.training",
         "yoda.xai",
     ],
 )
