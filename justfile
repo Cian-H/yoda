@@ -2,30 +2,16 @@
 default:
     @just --list
 
-# Install dependencies with uv
-install:
-    uv sync
-
-# Run tests
-test:
+# Run lint and test suites
+check:
+    uv run ruff check .
     uv run pytest
 
-# Run linter
-lint:
-    uv run ruff check .
+# Launch Marimo interactive workbench
+workbench:
+    uv run marimo edit notebooks/workbench.py
 
-# Format code
-format:
-    uv run ruff format .
-
-# Run lint and tests
-check: lint test
-
-# Run application
-run:
-    @echo "Override the 'run' target per project (e.g. 'uv run python -m yoda')"
-
-# Remove build and cache artefacts
+# Remove build, bytecode, and cache artefacts
 clean:
     rm -rf build/ dist/ *.egg-info/ .pytest_cache/ .ruff_cache/ .mypy_cache/ htmlcov/ .coverage
     find . -type d -name __pycache__ -exec rm -rf {} +
