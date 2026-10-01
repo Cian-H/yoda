@@ -12,6 +12,7 @@ import pytest
     [
         "yoda",
         "yoda.architecture",
+        "yoda.architecture.encoders",
         "yoda.architecture.schema",
         "yoda.nesy",
         "yoda.probabilistic",
