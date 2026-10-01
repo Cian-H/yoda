@@ -3176,7 +3176,7 @@ wheels = [
 [[package]]
 name = "yoda"
 version = "2026.10.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "marimo", extra = ["recommended"] },
     { name = "matplotlib" },
