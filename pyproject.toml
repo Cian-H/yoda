@@ -45,3 +45,7 @@ ignore = []
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
