@@ -65,9 +65,12 @@ class MultiheadPooledAttention(nn.Module):
             torch.randn(1, num_queries, embed_dim, device=device, dtype=dtype)
         )
 
-        self.attn = nn.MultiheadAttention(
-            embed_dim, num_heads=num_heads, batch_first=True, device=device, dtype=dtype
-        )
+        # Replace monolithic nn.MultiheadAttention with explicit projections
+        self.q_proj = nn.Linear(embed_dim, embed_dim, device=device, dtype=dtype)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, device=device, dtype=dtype)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, device=device, dtype=dtype)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, device=device, dtype=dtype)
+
         self.attn_matrix_hookpoint = nn.Identity()
         self.proj = nn.Linear(num_queries * embed_dim, embed_dim, device=device, dtype=dtype)
 
@@ -102,24 +105,13 @@ class MultiheadPooledAttention(nn.Module):
 
         b, t, d = q.shape
         _, s, _ = x.shape
-        h = self.attn.num_heads
+        h = self.num_heads
         d_h = d // h
 
-        # Extract projection weights from the fused in_proj_weight
-        in_w = self.attn.in_proj_weight
-        in_b = self.attn.in_proj_bias
-
         # Project Q, K, V
-        q_proj = nn.functional.linear(q, in_w[:d], in_b[:d] if in_b is not None else None)
-        k_proj = nn.functional.linear(
-            x, in_w[d : 2 * d], in_b[d : 2 * d] if in_b is not None else None
-        )
-        v_proj = nn.functional.linear(x, in_w[2 * d :], in_b[2 * d :] if in_b is not None else None)
-
-        # Reshape for multi-head computation: [B, H, T/S, D_h]
-        q_proj = q_proj.view(b, t, h, d_h).transpose(1, 2)
-        k_proj = k_proj.view(b, s, h, d_h).transpose(1, 2)
-        v_proj = v_proj.view(b, s, h, d_h).transpose(1, 2)
+        q_proj = self.q_proj(q).view(b, t, h, d_h).transpose(1, 2)
+        k_proj = self.k_proj(x).view(b, s, h, d_h).transpose(1, 2)
+        v_proj = self.v_proj(x).view(b, s, h, d_h).transpose(1, 2)
 
         # Scaled dot-product attention logits: [B, H, T, S]
         attn_weights = torch.matmul(q_proj, k_proj.transpose(-2, -1)) / (d_h**0.5)
@@ -134,7 +126,7 @@ class MultiheadPooledAttention(nn.Module):
         # Context fusion
         out = torch.matmul(attn_weights, v_proj)  # [B, H, T, D_h]
         out = out.transpose(1, 2).reshape(b, t, d)
-        out = self.attn.out_proj(out)
+        out = self.out_proj(out)
 
         out = out.reshape(batch_size, self.num_tokens * self.embed_dim)
         return self.proj(out)
