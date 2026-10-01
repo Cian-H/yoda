@@ -145,101 +145,62 @@ class DatasetIngestionPipeline:
             "mghafiri": [],
         }
 
-        # 1. Nimble train and eval (research posture)
-        files["nimble"].extend(
-            [
-                self.download_file(
-                    f"{self.NIMBLE_BASE_URL}/train.jsonl",
-                    self.raw_nimble / "train.jsonl",
-                ),
-                self.download_file(
-                    f"{self.NIMBLE_BASE_URL}/eval.jsonl",
-                    self.raw_nimble / "eval.jsonl",
-                ),
-            ]
-        )
+        downloads = [
+            ("nimble", f"{self.NIMBLE_BASE_URL}/train.jsonl", self.raw_nimble / "train.jsonl"),
+            ("nimble", f"{self.NIMBLE_BASE_URL}/eval.jsonl", self.raw_nimble / "eval.jsonl"),
+            (
+                "kev",
+                f"{self.KEV_BASE_URL}/decision-v1/train.jsonl",
+                self.raw_kev / "decision_v1_train.jsonl",
+            ),
+            (
+                "kev",
+                f"{self.KEV_BASE_URL}/decision-v1/test.jsonl",
+                self.raw_kev / "decision_v1_test.jsonl",
+            ),
+            (
+                "kev",
+                f"{self.KEV_BASE_URL}/decision-v2/train.jsonl",
+                self.raw_kev / "decision_v2_train.jsonl",
+            ),
+            (
+                "kev",
+                f"{self.KEV_BASE_URL}/decision-v2/test.jsonl",
+                self.raw_kev / "decision_v2_test.jsonl",
+            ),
+            (
+                "dwidlee_gen",
+                f"{self.DWIDLEE_GEN_URL}/train-00000-of-00001.parquet",
+                self.raw_dwidlee_gen / "train.parquet",
+            ),
+            (
+                "dwidlee_gen",
+                f"{self.DWIDLEE_GEN_URL}/test-00000-of-00001.parquet",
+                self.raw_dwidlee_gen / "test.parquet",
+            ),
+            (
+                "dwidlee_p2",
+                f"{self.DWIDLEE_P2_URL}/train-00000-of-00001.parquet",
+                self.raw_dwidlee_p2 / "train.parquet",
+            ),
+            (
+                "dwidlee_p2",
+                f"{self.DWIDLEE_P2_URL}/test-00000-of-00001.parquet",
+                self.raw_dwidlee_p2 / "test.parquet",
+            ),
+            ("n4ze3m", f"{self.N4ZE3M_URL}/train.jsonl", self.raw_n4ze3m / "train.jsonl"),
+            ("n4ze3m", f"{self.N4ZE3M_URL}/validation.jsonl", self.raw_n4ze3m / "validation.jsonl"),
+            ("mghafiri", f"{self.MGHAFIRI_URL}/train.jsonl", self.raw_mghafiri / "train.jsonl"),
+            (
+                "mghafiri",
+                f"{self.MGHAFIRI_URL}/validation.jsonl",
+                self.raw_mghafiri / "validation.jsonl",
+            ),
+            ("mghafiri", f"{self.MGHAFIRI_URL}/test.jsonl", self.raw_mghafiri / "test.jsonl"),
+        ]
 
-        # 2. Kev decision suites (Apache-2.0 clean posture)
-        files["kev"].extend(
-            [
-                self.download_file(
-                    f"{self.KEV_BASE_URL}/decision-v1/train.jsonl",
-                    self.raw_kev / "decision_v1_train.jsonl",
-                ),
-                self.download_file(
-                    f"{self.KEV_BASE_URL}/decision-v1/test.jsonl",
-                    self.raw_kev / "decision_v1_test.jsonl",
-                ),
-                self.download_file(
-                    f"{self.KEV_BASE_URL}/decision-v2/train.jsonl",
-                    self.raw_kev / "decision_v2_train.jsonl",
-                ),
-                self.download_file(
-                    f"{self.KEV_BASE_URL}/decision-v2/test.jsonl",
-                    self.raw_kev / "decision_v2_test.jsonl",
-                ),
-            ]
-        )
-
-        # 3. Dwidlee general (MIT)
-        files["dwidlee_gen"].extend(
-            [
-                self.download_file(
-                    f"{self.DWIDLEE_GEN_URL}/train-00000-of-00001.parquet",
-                    self.raw_dwidlee_gen / "train.parquet",
-                ),
-                self.download_file(
-                    f"{self.DWIDLEE_GEN_URL}/test-00000-of-00001.parquet",
-                    self.raw_dwidlee_gen / "test.parquet",
-                ),
-            ]
-        )
-
-        # 4. Dwidlee phase 2 (Apache-2.0)
-        files["dwidlee_p2"].extend(
-            [
-                self.download_file(
-                    f"{self.DWIDLEE_P2_URL}/train-00000-of-00001.parquet",
-                    self.raw_dwidlee_p2 / "train.parquet",
-                ),
-                self.download_file(
-                    f"{self.DWIDLEE_P2_URL}/test-00000-of-00001.parquet",
-                    self.raw_dwidlee_p2 / "test.parquet",
-                ),
-            ]
-        )
-
-        # 5. N4ze3m synth (MIT)
-        files["n4ze3m"].extend(
-            [
-                self.download_file(
-                    f"{self.N4ZE3M_URL}/train.jsonl",
-                    self.raw_n4ze3m / "train.jsonl",
-                ),
-                self.download_file(
-                    f"{self.N4ZE3M_URL}/validation.jsonl",
-                    self.raw_n4ze3m / "validation.jsonl",
-                ),
-            ]
-        )
-
-        # 6. Mghafiri scenarios (MIT)
-        files["mghafiri"].extend(
-            [
-                self.download_file(
-                    f"{self.MGHAFIRI_URL}/train.jsonl",
-                    self.raw_mghafiri / "train.jsonl",
-                ),
-                self.download_file(
-                    f"{self.MGHAFIRI_URL}/validation.jsonl",
-                    self.raw_mghafiri / "validation.jsonl",
-                ),
-                self.download_file(
-                    f"{self.MGHAFIRI_URL}/test.jsonl",
-                    self.raw_mghafiri / "test.jsonl",
-                ),
-            ]
-        )
+        for category, url, target in downloads:
+            files[category].append(self.download_file(url, target))
 
         return files
 
@@ -340,6 +301,39 @@ class DatasetIngestionPipeline:
             return [str(criteria)]
         return []
 
+    def _build_payload(
+        self,
+        q_key: str,
+        q_data: dict[str, Any],
+        state_dict: dict[str, Any],
+        target_val: Any,
+        base_metadata: dict[str, Any],
+    ) -> DecisionPayload:
+        """Helper to construct a DecisionPayload from normalized question data."""
+        raw_inst = q_data.get("instructions")
+        instructions = self._normalize_instructions(raw_inst, q_key)
+        constraints = self._format_criteria(q_data.get("criteria"))
+
+        metadata = dict(base_metadata)
+        metadata.update(
+            {
+                "question_id": q_key,
+                "question_type": q_data.get("type", "choice"),
+                "target": target_val,
+            }
+        )
+
+        return DecisionPayload(
+            query=instructions,
+            context=QueryContext(
+                semantic_embedding=[],
+                symbolic_state=state_dict,
+                history=[],
+            ),
+            constraints=constraints,
+            metadata=metadata,
+        )
+
     def parse_nimble_record(self, raw_row: dict[str, Any]) -> list[DecisionPayload]:
         """Converts a raw Nimble JSONL record into one or more DecisionPayloads."""
         payloads: list[DecisionPayload] = []
@@ -347,46 +341,26 @@ class DatasetIngestionPipeline:
         state_dict = self._normalize_state(raw_input.get("state", ""))
         questions = raw_input.get("questions", {})
 
-        domain = raw_row.get("domain", "general")
-        family = raw_row.get("family", "unknown")
-        record_id = raw_row.get("id", "nimble_anon")
-        teacher = raw_row.get("teacher", {})
-        teacher_answers = teacher.get("answers", {})
+        base_metadata = {
+            "source": "nimble",
+            "record_id": raw_row.get("id", "nimble_anon"),
+            "domain": raw_row.get("domain", "general"),
+            "family": raw_row.get("family", "unknown"),
+        }
+        teacher_answers = raw_row.get("teacher", {}).get("answers", {})
 
         for q_key, q_data in questions.items():
             if not isinstance(q_data, dict):
                 continue
-
-            raw_inst = q_data.get("instructions")
-            instructions = self._normalize_instructions(raw_inst, q_key)
-            constraints = self._format_criteria(q_data.get("criteria"))
-            q_type = q_data.get("type", "choice")
 
             target_val = None
             if q_key in teacher_answers:
                 t_ans = teacher_answers[q_key]
                 target_val = t_ans.get("choice") or t_ans.get("noul") or t_ans.get("score")
 
-            payload = DecisionPayload(
-                query=instructions,
-                context=QueryContext(
-                    semantic_embedding=[],
-                    symbolic_state=state_dict,
-                    history=[],
-                ),
-                constraints=constraints,
-                metadata={
-                    "source": "nimble",
-                    "record_id": record_id,
-                    "domain": domain,
-                    "family": family,
-                    "question_id": q_key,
-                    "question_type": q_type,
-                    "target": target_val,
-                },
+            payloads.append(
+                self._build_payload(q_key, q_data, state_dict, target_val, base_metadata)
             )
-            payloads.append(payload)
-
         return payloads
 
     def parse_kev_record(self, raw_row: dict[str, Any], file_tag: str) -> list[DecisionPayload]:
@@ -394,35 +368,14 @@ class DatasetIngestionPipeline:
         payloads: list[DecisionPayload] = []
         state_dict = self._normalize_state(raw_row.get("state", ""))
         questions = raw_row.get("questions", {})
+        base_metadata = {"source": "kev", "file_tag": file_tag}
 
         for q_key, q_data in questions.items():
             if not isinstance(q_data, dict):
                 continue
-
-            raw_inst = q_data.get("instructions")
-            instructions = self._normalize_instructions(raw_inst, q_key)
-            constraints = self._format_criteria(q_data.get("criteria"))
-            q_type = q_data.get("type", "choice")
-            target_label = q_data.get("label")
-
-            payload = DecisionPayload(
-                query=instructions,
-                context=QueryContext(
-                    semantic_embedding=[],
-                    symbolic_state=state_dict,
-                    history=[],
-                ),
-                constraints=constraints,
-                metadata={
-                    "source": "kev",
-                    "file_tag": file_tag,
-                    "question_id": q_key,
-                    "question_type": q_type,
-                    "target": target_label,
-                },
+            payloads.append(
+                self._build_payload(q_key, q_data, state_dict, q_data.get("label"), base_metadata)
             )
-            payloads.append(payload)
-
         return payloads
 
     def parse_dwidlee_row(self, row: dict[str, Any], source_tag: str) -> DecisionPayload:
@@ -465,38 +418,19 @@ class DatasetIngestionPipeline:
         if not isinstance(questions, dict):
             return payloads
 
-        state_id = raw_row.get("state_id", "n4ze3m_anon")
-        domain = raw_row.get("domain", "reviews")
+        base_metadata = {
+            "source": "n4ze3m_synth",
+            "record_id": raw_row.get("state_id", "n4ze3m_anon"),
+            "domain": raw_row.get("domain", "reviews"),
+        }
 
         for q_key, q_data in questions.items():
             if not isinstance(q_data, dict):
                 continue
-
-            raw_inst = q_data.get("instructions")
-            instructions = self._normalize_instructions(raw_inst, q_key)
-            constraints = self._format_criteria(q_data.get("criteria"))
-            q_type = q_data.get("type", "choice")
             target_val = gold.get(q_key) if isinstance(gold, dict) else None
-
-            payload = DecisionPayload(
-                query=instructions,
-                context=QueryContext(
-                    semantic_embedding=[],
-                    symbolic_state=state_dict,
-                    history=[],
-                ),
-                constraints=constraints,
-                metadata={
-                    "source": "n4ze3m_synth",
-                    "record_id": state_id,
-                    "domain": domain,
-                    "question_id": q_key,
-                    "question_type": q_type,
-                    "target": target_val,
-                },
+            payloads.append(
+                self._build_payload(q_key, q_data, state_dict, target_val, base_metadata)
             )
-            payloads.append(payload)
-
         return payloads
 
     def parse_mghafiri_record(self, raw_row: dict[str, Any]) -> list[DecisionPayload]:
@@ -509,51 +443,30 @@ class DatasetIngestionPipeline:
         if not isinstance(questions, dict):
             return payloads
 
-        record_id = raw_row.get("id", "mghafiri_anon")
-        domain = raw_row.get("domain", "general")
-        pattern = raw_row.get("pattern", "unknown")
+        base_metadata = {
+            "source": "mghafiri_scenarios",
+            "record_id": raw_row.get("id", "mghafiri_anon"),
+            "domain": raw_row.get("domain", "general"),
+            "pattern": raw_row.get("pattern", "unknown"),
+        }
 
         for q_key, q_data in questions.items():
             if not isinstance(q_data, dict):
                 continue
-
-            raw_inst = q_data.get("instructions")
-            instructions = self._normalize_instructions(raw_inst, q_key)
-            constraints = self._format_criteria(q_data.get("criteria"))
-            q_type = q_data.get("type", "choice")
 
             target_val = None
             if isinstance(targets, dict) and q_key in targets:
                 t_entry = targets[q_key]
                 if isinstance(t_entry, dict):
                     target_val = (
-                        t_entry.get("noul")
-                        if "noul" in t_entry
-                        else t_entry.get("probabilities")
+                        t_entry.get("noul") if "noul" in t_entry else t_entry.get("probabilities")
                     )
                 else:
                     target_val = t_entry
 
-            payload = DecisionPayload(
-                query=instructions,
-                context=QueryContext(
-                    semantic_embedding=[],
-                    symbolic_state=state_dict,
-                    history=[],
-                ),
-                constraints=constraints,
-                metadata={
-                    "source": "mghafiri_scenarios",
-                    "record_id": record_id,
-                    "domain": domain,
-                    "pattern": pattern,
-                    "question_id": q_key,
-                    "question_type": q_type,
-                    "target": target_val,
-                },
+            payloads.append(
+                self._build_payload(q_key, q_data, state_dict, target_val, base_metadata)
             )
-            payloads.append(payload)
-
         return payloads
 
     @staticmethod
@@ -698,9 +611,10 @@ class DatasetIngestionPipeline:
         train_out = self.processed_dir / "aggregated_train.jsonl"
         eval_out = self.processed_dir / "aggregated_eval.jsonl"
 
-        with open(train_out, "w", encoding="utf-8") as f_train, open(
-            eval_out, "w", encoding="utf-8"
-        ) as f_eval:
+        with (
+            open(train_out, "w", encoding="utf-8") as f_train,
+            open(eval_out, "w", encoding="utf-8") as f_eval,
+        ):
             train_count, eval_count = self._stream_datasets(f_train, f_eval)
 
         manifest = {
