@@ -32,12 +32,18 @@ Guide and procedure for running low-latency benchmark sweeps and evaluating the 
      uv run marimo edit notebooks/workbench.py
      ```
 
-3. **Metrics Collection**:
+3. **Baseline Comparison via MCP (`jev`)**:
+   When evaluating decision agreement or comparing Yoda's candidate pruning against baseline decision semantics, invoke the `jev` MCP tools:
+   - Call `jev_decide` passing the same candidate set, evidence, and priorities to obtain Jev's reference choice distribution and per-candidate requirement satisfaction.
+   - Use `jev_compare` to measure semantic consistency between Yoda's generated decision rationales and reference baseline reasoning traces.
+
+4. **Metrics Collection**:
    Record:
    - P50, P95, and P99 latency (ms).
    - Constraint satisfaction rate (%).
    - Uncertainty distribution (epistemic vs aleatoric).
+   - Baseline decision agreement rate (% vs Jev/Laya).
 
-4. **Telemetry & Audit**:
+5. **Telemetry & Audit**:
    - Verify that all benchmark runs emit structured log events (`benchmark.run.start`, `benchmark.run.complete`).
    - Store results under `experiments/` or `data/` using `polars` / `safetensors`.

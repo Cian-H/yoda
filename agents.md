@@ -41,22 +41,45 @@ Rules come in two flavors. **Reactive** rules (changes, UI, layered architecture
 
 Each row states the *condition* and the *file*, not what the file is about. If two rows fit, read both.
 
-### Measurement habit
+## Tooling & MCP Guidance
 
-The rules budget is small (a few kilobytes of always-loaded material) but three larger line items compete for the same window: the conversation itself (grows every turn), MCP tool schemas (varies by connected servers), and per-host system prompts. Check `/context` occasionally when a session starts feeling forgetful; the culprit is usually one of those three, not this file.
+Agents operating in this repository should proactively utilize available Model Context Protocol (MCP) servers and development tools according to the domain task:
 
-For MCP specifically: this project's project-scoped servers, if any, are declared in `.mcp.json` at the repo root (see `.mcp.example.json` for the starter template and the safety pattern — pinned versions, name-based allowlist, per-project denylist for account-level connectors). Every server contributes tool-schema tokens to every session; a browser MCP is typically ~9k tokens for 45 tools, and heavy account-level connectors can top 20k each. On Claude Code, personal denies live in the gitignored `.claude/settings.local.json`'s `deniedMcpServers` array; on other hosts, the equivalent lives in the host's own settings.
+### 1. Decision Evaluation & Baselines (`jev` MCP)
+Yoda is an experimental System 1 decision engine designed for fast, intuitive heuristic evaluation while remaining grounded by symbolic constraints. The architecture is benchmarked against reference systems including Jev and Laya. When available, leverage the `jev` MCP suite for comparative evaluation, invariant verification, and bounded architectural decisions:
+- **`jev_decide`**: Evaluate bounded decision spaces with explicit candidates, evidence, and priorities. Use this to benchmark Yoda's low-latency heuristic selections against Jev's bounded semantic judgment distribution, or to resolve non-trivial architecture/tradeoff choices during development.
+- **`jev_compare`**: Compare semantic representations, candidate ranking outputs, or check for specification drift between design documentation and implementation.
+- **`jev_verify` & `jev_gate`**: Check factual statements, test invariants, or gate proposed patches against evidence and reported test outputs before finalizing changes.
+- **`jev_classify` & `jev_screen`**: Benchmark rapid categorization decisions against Jev baseline distributions.
+
+### 2. Code Navigation & Structural Editing (`lsp-servers` & `structural-editing`)
+- Prefer AST-aware tools (`structural-editing` tools like `ast_search`, `read_node`, `ast_modify`) and language server protocol queries (`lsp-servers` like `find_references`, `go_to_definition`, `get_diagnostics`) for safe code navigation and structural refactoring across the `yoda` package.
+
+### 3. Logic Decomposition (`sequential-thinking`)
+- When designing or verifying complex neuro-symbolic logic invariants (e.g. continuous LTN t-norms, Kleene 3-valued or Belnap 4-valued truth semantics), use `sequentialthinking` to rigorously trace edge cases and boundary conditions before implementation.
+
+### 4. Context & History (`atuin` & `memory`)
+- **`atuin`**: Use `atuin_history` and `atuin_output` to inspect recent command execution history and shell outputs when diagnosing environment issues.
+- **`memory`**: Store and retrieve long-lived project concepts, entity relationships, and architectural invariants across multi-step research sessions.
+
+### 5. MCP Token Budget & Hygiene
+The rules budget is small, but MCP tool schemas compete for context window space. Project-scoped servers, if any, are declared in `.mcp.json` at the repo root (see `.mcp.example.json` for template). Keep in mind tool schema overhead: check `/context` occasionally when a session starts feeling forgetful, and avoid loading redundant or unused connectors.
 
 Architecture decisions and their trade-offs live in [`.docs/adrs/`](.docs/adrs/) — read these before making structural changes.
 
 ## Run
 
 ```bash
-just install       # uv sync
-just check         # lint + test
-just test          # uv run pytest
-just format        # uv run ruff format
-uv run marimo edit notebooks/workbench.py
+# Direct commands (preferred for single-purpose tasks)
+uv run pytest                      # Run test suite
+uv run ruff check .                # Lint check
+uv run ruff format .               # Format codebase
+uv sync                            # Sync dependencies (if outside devenv)
+
+# Composite recipes (via justfile)
+just check                         # Run lint and test suites
+just workbench                     # Launch Marimo interactive workbench
+just clean                         # Remove build, bytecode, and cache artefacts
 ```
 
 ## Architecture map
