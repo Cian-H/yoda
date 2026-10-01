@@ -45,24 +45,34 @@ Each row states the *condition* and the *file*, not what the file is about. If t
 
 Agents operating in this repository should proactively utilize available Model Context Protocol (MCP) servers and development tools according to the domain task:
 
-### 1. Decision Evaluation & Baselines (`jev` MCP)
+### 1. Decision Evaluation & Baselines (`jev`)
 Yoda is an experimental System 1 decision engine designed for fast, intuitive heuristic evaluation while remaining grounded by symbolic constraints. The architecture is benchmarked against reference systems including Jev and Laya. When available, leverage the `jev` MCP suite for comparative evaluation, invariant verification, and bounded architectural decisions:
-- **`jev_decide`**: Evaluate bounded decision spaces with explicit candidates, evidence, and priorities. Use this to benchmark Yoda's low-latency heuristic selections against Jev's bounded semantic judgment distribution, or to resolve non-trivial architecture/tradeoff choices during development.
+- **`jev_decide`**: Evaluate bounded decision spaces with explicit candidates, evidence, and priorities. Benchmark Yoda's low-latency heuristic selections against Jev's bounded semantic judgment distribution, or resolve non-trivial architecture/tradeoff choices during development.
 - **`jev_compare`**: Compare semantic representations, candidate ranking outputs, or check for specification drift between design documentation and implementation.
 - **`jev_verify` & `jev_gate`**: Check factual statements, test invariants, or gate proposed patches against evidence and reported test outputs before finalizing changes.
 - **`jev_classify` & `jev_screen`**: Benchmark rapid categorization decisions against Jev baseline distributions.
 
-### 2. Code Navigation & Structural Editing (`lsp-servers` & `structural-editing`)
-- Prefer AST-aware tools (`structural-editing` tools like `ast_search`, `read_node`, `ast_modify`) and language server protocol queries (`lsp-servers` like `find_references`, `go_to_definition`, `get_diagnostics`) for safe code navigation and structural refactoring across the `yoda` package.
+### 2. Live Library Documentation (`context7`)
+When working with external dependencies whose APIs evolve rapidly (e.g. PyTorch 2.x, PyTorch Lightning, Optuna, Safetensors, Polars, Pydantic v2, Marimo):
+- Use `resolve-library-id` followed by `query-docs` to retrieve canonical, up-to-date API references and usage examples directly from official documentation rather than guessing deprecated parameters.
 
-### 3. Logic Decomposition (`sequential-thinking`)
-- When designing or verifying complex neuro-symbolic logic invariants (e.g. continuous LTN t-norms, Kleene 3-valued or Belnap 4-valued truth semantics), use `sequentialthinking` to rigorously trace edge cases and boundary conditions before implementation.
+### 3. Code Navigation & Analysis (`lsp-servers`)
+- Proactively leverage language server protocol tools (`find_references`, `go_to_definition`, `list_symbols`, `get_diagnostics`, `rename_symbol`) for semantic code navigation, cross-referencing, and safe symbol refactoring across the `yoda` package.
+- *Note*: `structural-editing` MCP is specifically for Lisp languages; do not use it for Python AST modifications in this codebase.
 
-### 4. Context & History (`atuin` & `memory`)
-- **`atuin`**: Use `atuin_history` and `atuin_output` to inspect recent command execution history and shell outputs when diagnosing environment issues.
-- **`memory`**: Store and retrieve long-lived project concepts, entity relationships, and architectural invariants across multi-step research sessions.
+### 4. File Operations & Exploration (`filesystem`)
+- Use `filesystem` tools (`read_text_file`, `directory_tree`, `search_files`, `get_file_info`) when inspecting directory structures, searching across hierarchies, or performing bulk file inspections.
 
-### 5. MCP Token Budget & Hygiene
+### 5. Multi-Step Logic & Invariant Reasoning (`sequential-thinking`)
+- When designing or verifying complex neuro-symbolic logic invariants (e.g. continuous LTN t-norms, Gödel/Łukasiewicz/Product t-norm properties, Kleene 3-valued or Belnap 4-valued truth tables), use `sequentialthinking` to rigorously decompose edge cases, boundary conditions, and proof steps before writing code.
+
+### 6. Shell History & Diagnostics (`atuin`)
+- Use `atuin_history`, `atuin_output`, and `atuin_output_search` to inspect command execution history, investigate recent failure outputs, or recover shell context during debugging.
+
+### 7. Persistent Architectural Memory (`memory`)
+- Use `create_entities`, `create_relations`, and `search_nodes` to store and query long-lived domain concepts, verified NeSy rules, and architectural invariants across iterative development sessions.
+
+### 8. MCP Token Budget & Hygiene
 The rules budget is small, but MCP tool schemas compete for context window space. Project-scoped servers, if any, are declared in `.mcp.json` at the repo root (see `.mcp.example.json` for template). Keep in mind tool schema overhead: check `/context` occasionally when a session starts feeling forgetful, and avoid loading redundant or unused connectors.
 
 Architecture decisions and their trade-offs live in [`.docs/adrs/`](.docs/adrs/) — read these before making structural changes.
