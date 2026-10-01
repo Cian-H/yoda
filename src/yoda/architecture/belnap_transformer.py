@@ -177,8 +177,12 @@ class BelnapAttention(nn.Module):
         ) / scale
 
         if mask is not None:
-            s_pos = s_pos.masked_fill(~mask, -1e9)
-            s_neg = s_neg.masked_fill(~mask, -1e9)
+            if mask.dtype == torch.bool:
+                s_pos = s_pos.masked_fill(~mask, -1e9)
+                s_neg = s_neg.masked_fill(~mask, -1e9)
+            else:
+                s_pos = s_pos + mask
+                s_neg = s_neg + mask
 
         # Step 3: Knowledge Gating by source token intrinsic knowledge
         # Intrinsic knowledge mass per source token: k_src in [0, 1]

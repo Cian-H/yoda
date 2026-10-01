@@ -13,7 +13,14 @@ from typing import ClassVar
 import torch
 from torch import nn
 
+from yoda.architecture.belnap_transformer import BelnapAttention, BelnapState
+
 logger = logging.getLogger(__name__)
+
+__all__: list[str] = [
+    "BelnapMultiheadPooledAttention",
+    "MultiheadPooledAttention",
+]
 
 
 class MultiheadPooledAttention(nn.Module):
@@ -131,3 +138,128 @@ class MultiheadPooledAttention(nn.Module):
 
         out = out.reshape(batch_size, self.num_tokens * self.embed_dim)
         return self.proj(out)
+
+
+class BelnapMultiheadPooledAttention(nn.Module):
+    """Belnap Bilattice Multihead Pooled Attention.
+
+    Pools variable-length sequences into fixed-dimensional latent representations using
+    epistemic query probes and Belnap four-valued cross-attention. Preserves both positive
+    and negative evidence, suppressing uninformative inputs to Neither (k -> 0) and
+    preserving contradiction (Both: e+ >> 0, e- >> 0) without softmax attention sinks.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_queries: int = 4,
+        num_heads: int | None = None,
+        init_bias: float = -3.0,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        """Initializes BelnapMultiheadPooledAttention.
+
+        Args:
+            embed_dim: Dimensionality of token embeddings.
+            num_queries: Number of epistemic query probe tokens.
+            num_heads: Number of attention heads. Defaults to 4, 2, or 1 based on embed_dim.
+            init_bias: Initial negative bias for BelnapAttention output projections.
+            device: Target execution device.
+            dtype: Target execution data type.
+        """
+        super().__init__()
+        if num_heads is None:
+            num_heads = 4 if embed_dim % 4 == 0 else (2 if embed_dim % 2 == 0 else 1)
+
+        self.embed_dim = embed_dim
+        self.num_queries = num_queries
+        self.num_heads = num_heads
+
+        # Epistemic learnable query probes for positive and negative evidence
+        self.raw_q_pos = nn.Parameter(
+            torch.empty(1, num_queries, embed_dim, device=device, dtype=dtype)
+        )
+        self.raw_q_neg = nn.Parameter(
+            torch.empty(1, num_queries, embed_dim, device=device, dtype=dtype)
+        )
+        nn.init.uniform_(self.raw_q_pos, -0.5, 0.5)
+        nn.init.uniform_(self.raw_q_neg, -0.5, 0.5)
+
+        # Input adapter projection for raw continuous tensors
+        self.input_proj = nn.Linear(embed_dim, 2 * embed_dim, device=device, dtype=dtype)
+
+        # Belnap bipolar cross-attention
+        self.belnap_attn = BelnapAttention(
+            d_model=embed_dim,
+            n_heads=num_heads,
+            bias=True,
+            init_bias=init_bias,
+        )
+
+        # Output projection from concatenated dual evidence features to latent vector
+        self.proj = nn.Linear(
+            num_queries * 2 * embed_dim,
+            embed_dim,
+            device=device,
+            dtype=dtype,
+        )
+
+        logger.debug(
+            "architecture.belnap_mpa.init",
+            extra={
+                "embed_dim": embed_dim,
+                "num_queries": num_queries,
+                "num_heads": num_heads,
+                "init_bias": init_bias,
+            },
+        )
+
+    def forward(
+        self,
+        x: BelnapState | torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, BelnapState]:
+        """Executes Belnap epistemic pooled attention over input sequences.
+
+        Args:
+            x: Input sequence as either a `BelnapState` or a continuous `torch.Tensor`
+                of shape `(batch_size, seq_len, embed_dim)`.
+            mask: Optional attention mask of shape `(batch_size, 1, num_queries, seq_len)`.
+
+        Returns:
+            A tuple of `(latent, pooled_state)`:
+            - `latent`: Projected fixed-dimensional representation `(batch_size, embed_dim)`.
+            - `pooled_state`: Aggregated `BelnapState` of shape
+              `(batch_size, num_queries, embed_dim)`.
+        """
+        if isinstance(x, BelnapState):
+            kv_state = x
+            batch_size = x.e_pos.size(0)
+        else:
+            batch_size = x.size(0)
+            pos_raw, neg_raw = torch.sigmoid(self.input_proj(x)).chunk(2, dim=-1)
+            kv_state = BelnapState(e_pos=pos_raw, e_neg=neg_raw)
+
+        # Epistemic query state bounded strictly in [0, 1]
+        q_pos = torch.sigmoid(self.raw_q_pos).expand(batch_size, -1, -1).contiguous()
+        q_neg = torch.sigmoid(self.raw_q_neg).expand(batch_size, -1, -1).contiguous()
+        q_state = BelnapState(e_pos=q_pos, e_neg=q_neg)
+
+        # Bipolar cross-attention pooling
+        pooled_state = self.belnap_attn(q=q_state, kv=kv_state, mask=mask)
+
+        # Flatten dual evidence and project into latent space
+        features = torch.cat([pooled_state.e_pos, pooled_state.e_neg], dim=-1).flatten(1)
+        latent = self.proj(features)
+
+        logger.debug(
+            "architecture.belnap_mpa.forward",
+            extra={
+                "batch_size": batch_size,
+                "input_type": "BelnapState" if isinstance(x, BelnapState) else "Tensor",
+                "num_queries": self.num_queries,
+            },
+        )
+
+        return latent, pooled_state

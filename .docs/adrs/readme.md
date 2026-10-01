@@ -11,5 +11,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0002](./0002-building-blocks-attention-and-belnap.md) | Core Building Blocks: Multihead Pooled Attention and Fuzzy Belnap Bilattice | Accepted | 2026-10-01 |
 | [0003](./0003-dataset-ingestion-and-normalization.md) | Dataset Ingestion, Licensing Audit, and Schema Normalization | Accepted | 2026-10-01 |
 | [0004](./0004-belnap-bilattice-native-transformer.md) | Belnap Bilattice Native Transformer & Decoupled Ingestion | Accepted | 2026-10-01 |
+| [0005](./0005-belnap-multihead-pooled-attention.md) | Belnap Multihead Pooled Attention (Belnap-MPA) | Accepted | 2026-10-01 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)

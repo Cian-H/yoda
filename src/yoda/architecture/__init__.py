@@ -1,6 +1,9 @@
 """Architecture components and schema definitions for yoda."""
 
-from yoda.architecture.attention import MultiheadPooledAttention
+from yoda.architecture.attention import (
+    BelnapMultiheadPooledAttention,
+    MultiheadPooledAttention,
+)
 from yoda.architecture.belnap_transformer import (
     BelnapAttention,
     BelnapDecisionTransformer,
@@ -14,6 +17,7 @@ __all__: list[str] = [
     "BelnapAttention",
     "BelnapDecisionTransformer",
     "BelnapFFN",
+    "BelnapMultiheadPooledAttention",
     "BelnapState",
     "BelnapTransformerBlock",
     "DecisionPayload",
