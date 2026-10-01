@@ -9,5 +9,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0000](./0000-adr-template.md) | ADR Template (do not cite) | Template | — |
 | [0001](./0001-architecture-foundations.md) | Architecture Foundations & System 1 Decision Engine | Accepted | 2026-10-01 |
 | [0002](./0002-building-blocks-attention-and-belnap.md) | Core Building Blocks: Multihead Pooled Attention and Fuzzy Belnap Bilattice | Accepted | 2026-10-01 |
+| [0003](./0003-dataset-ingestion-and-normalization.md) | Dataset Ingestion, Licensing Audit, and Schema Normalization | Accepted | 2026-10-01 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)
