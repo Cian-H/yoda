@@ -23,6 +23,9 @@ logger = logging.getLogger("experiments.train_yoda")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train YodaDecisionEngine on unified System 1 datasets.")
+    parser.add_argument("--text-model-name", type=str, default="sentence-transformers/all-MiniLM-L6-v2")
+    parser.add_argument("--freeze-backbone", action="store_true", default=True, help="Freeze pretrained text encoder backbone weights")
+    parser.add_argument("--unfreeze-backbone", dest="freeze_backbone", action="store_false")
     parser.add_argument("--train-path", type=str, default="data/processed/aggregated_train.jsonl")
     parser.add_argument("--eval-path", type=str, default="data/processed/aggregated_eval.jsonl")
     parser.add_argument("--output-model", type=str, default="models/yoda_system1_v1.pt")
@@ -86,12 +89,13 @@ def main() -> None:
     )
 
     logger.info(
-        "Instantiating YodaDecisionEngine (embed_dim=%d, num_choices=%d)...",
+        "Instantiating YodaDecisionEngine (backbone=%s, embed_dim=%d, num_choices=%d)...",
+        args.text_model_name,
         args.embed_dim,
         args.num_choices,
     )
     model = YodaDecisionEngine(
-        text_model_name="dummy",
+        text_model_name=args.text_model_name,
         embed_dim=args.embed_dim,
         num_q_probes=4,
         num_c_probes=8,
@@ -100,9 +104,17 @@ def main() -> None:
         n_heads=4,
         device=device,
     )
+    model = model.to(device)
 
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info("Model created with %s trainable parameters", f"{total_params:,}")
+    # Optionally freeze pretrained backbone to conserve memory and speed up Belnap adaptation
+    if args.freeze_backbone and hasattr(model.text_encoder, "model") and model.text_encoder.model is not None:
+        for param in model.text_encoder.model.parameters():
+            param.requires_grad = False
+        logger.info("Froze pretrained transformer backbone weights")
+
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info("Model created: %s trainable / %s total parameters", f"{trainable_params:,}", f"{total_params:,}")
 
     trainer = YodaTrainer(
         model=model,
