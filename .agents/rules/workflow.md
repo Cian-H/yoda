@@ -85,7 +85,7 @@ Write the prompt file **before** or **alongside** the changes on the task's firs
 
 ## 2. Create or update an ADR
 
-ADRs (Architecture Decision Records) live under `.docs/adrs/` and capture the **why** behind structural choices: which framework, which layer pattern, which library, which interaction model. Each is a single file in slim Nygard format and is indexed by `.docs/adrs/README.md`.
+ADRs (Architecture Decision Records) live under `.docs/adrs/` and capture the **why** behind structural choices: which framework, which layer pattern, which library, which interaction model. Each is a single file in slim Nygard format and is indexed by `.docs/adrs/readme.md`.
 
 The prompt file records *what happened in this request*; the ADR records *what shape the project now has and why*. Many requests produce a prompt without touching an ADR — that's expected. The ADR question is only "did the architectural picture change?"
 
@@ -97,7 +97,7 @@ A request introduces a new ADR when it adds something the existing ADRs don't al
 - A new module, layer, or pattern that future code is expected to follow.
 - A decision with trade-offs worth recording — alternatives considered, constraints, deferred follow-ups.
 
-Filename pattern: `.docs/adrs/<NNNN>-<kebab-case-slug>.md`. `NNNN` is the next free four-digit number; numbers never get reused. Append the new ADR's row to the table in `.docs/adrs/README.md` so the index stays current.
+Filename pattern: `.docs/adrs/<NNNN>-<kebab-case-slug>.md`. `NNNN` is the next free four-digit number; numbers never get reused. Append the new ADR's row to the table in `.docs/adrs/readme.md` so the index stays current.
 
 ### When to update an existing ADR
 

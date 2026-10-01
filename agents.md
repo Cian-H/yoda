@@ -52,9 +52,10 @@ Architecture decisions and their trade-offs live in [`.docs/adrs/`](.docs/adrs/)
 ## Run
 
 ```bash
-devenv shell (or uv sync)
-uv run pytest -o pythonpath=src
-uv run ruff check .
+just install       # uv sync
+just check         # lint + test
+just test          # uv run pytest
+just format        # uv run ruff format
 uv run marimo edit notebooks/workbench.py
 ```
 
