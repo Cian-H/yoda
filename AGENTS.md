@@ -28,7 +28,7 @@ Five things, on every turn, whichever agent is reading this.
 
 The files under `.agents/rules/` are **reference, and are deliberately not preloaded**. Read the file when its trigger fires, and read it *before* acting rather than after: each exists to stop a specific mistake that is expensive to undo, and reaching for one after the code is written is the failure it was meant to prevent. If a trigger is ambiguous, read the file.
 
-Rules come in two flavors. **Reactive** rules (security, changes, UI, layered architecture, frontend) fire only when their specific surface is being touched — read them then, follow them then. **Proactive-discipline** rules (testing, metrics, telemetry) fire on *every* relevant work unit when opted in — read them once per session and apply the discipline on every code change, not only when the discipline's artifact is already being touched. If a project opted into metrics and you're building a new subsystem, ship events for it in the same commit; don't wait to be asked.
+Rules come in two flavors. **Reactive** rules (changes, UI, layered architecture, frontend) fire only when their specific surface is being touched — read them then, follow them then. **Proactive-discipline** rules (testing, metrics, telemetry) fire on *every* relevant work unit when opted in — read them once per session and apply the discipline on every code change, not only when the discipline's artifact is already being touched. If a project opted into metrics and you're building a new subsystem, ship events for it in the same commit; don't wait to be asked.
 
 | When | Read |
 | --- | --- |
@@ -36,7 +36,6 @@ Rules come in two flavors. **Reactive** rules (security, changes, UI, layered ar
 | a new dependency, module, layer or pattern | [`workflow.md`](.agents/rules/workflow.md) §2 (ADR) |
 | a new, changed or deleted code path, or a new failure branch | [`workflow.md`](.agents/rules/workflow.md) §3 (telemetry) |
 | writing Python | [`best-practices.md`](.agents/rules/best-practices.md) |
-| auth, input, SQL, output encoding, headers, secrets, logging, rate limits, deps | [`workflow-security.md`](.agents/rules/workflow-security.md) |
 | writing or removing a deferred-idea entry | [`workflow-todos.md`](.agents/rules/workflow-todos.md) |
 | writing production code — tests ship in the same commit | [`workflow-testing.md`](.agents/rules/workflow-testing.md) |
 
