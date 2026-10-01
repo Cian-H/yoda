@@ -74,7 +74,7 @@ For a **continuing** task, open the existing file for the current task and amend
 
 ## Consulted rules
 
-<Rules that a path or condition in the change fires, one per line as `<rule file> — <one-line summary of the trigger that fired>`. Attentional triggers (ADR, telemetry, security surface) name themselves here too when they applied, even though no path-check enforces them. Write `none` on its own line if no trigger fired. The pre-commit hook cross-checks this section against the staged paths — a mismatch is a soft fail with the missing rule name and an override syntax (`<rule> (n/a — <reason>)`) for the false-positive case.>
+<Rules that a path or condition in the change fires, one per line as `<rule file> — <one-line summary of the trigger that fired>`. Attentional triggers (ADR, telemetry) name themselves here too when they applied, even though no path-check enforces them. Write `none` on its own line if no trigger fired. The pre-commit hook cross-checks this section against the staged paths — a mismatch is a soft fail with the missing rule name and an override syntax (`<rule> (n/a — <reason>)`) for the false-positive case.>
 
 ## Output
 
@@ -259,10 +259,6 @@ Before declaring a commit done, grep the diff for the logger calls and the struc
 - Could any field carry sensitive data — a credential, token, password, unmasked DSN, PII, billing identifier, or raw user-supplied content? If yes, redact at the source.
 - Is the message string a static event name (no interpolation)?
 - For new failure paths: is there a corresponding log at WARNING or ERROR?
-
-### Security checks
-
-Security has its own companion rule: `workflow-security.md`. The short version: changes that touch a security-sensitive surface (auth, input validation, SQL, output encoding, transport headers, secrets, logging, rate limits, dependency adds/upgrades, LLM context) walk the rubric in `.docs/security/methodology.md` *before commit*, the same way telemetry coherence is checked. The rubric is grouped by surface — read only the sub-sections that match what your change touched. Full audits remain dated sibling files under `.docs/security/<YYYY-MM-DD>-<slug>.md` on a cadence.
 
 ## 4. Commit the result
 
