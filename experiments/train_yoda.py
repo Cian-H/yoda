@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from yoda.architecture.engine import YodaDecisionEngine
-from yoda.data import YodaDecisionDataset, YodaParquetDataset, collate_decision_batch
+from yoda.data import YodaDecisionDataset, YodaParquetDataset, collate_decision_batch, run_etl
 from yoda.training import YodaLightningAdapter, YodaTrainer
 from yoda.xai import run_dla_evaluation
 
@@ -104,6 +104,17 @@ def main() -> None:
         if p.suffix.lower() == ".parquet":
             return YodaParquetDataset(
                 file_path=p,
+                max_samples=max_samples,
+                shuffle_choices=shuffle_choices,
+            )
+        if p.suffix.lower() == ".jsonl":
+            parquet_path = run_etl(
+                input_path=p,
+                max_choices=max_choices,
+                max_samples=max_samples,
+            )
+            return YodaParquetDataset(
+                file_path=parquet_path,
                 max_samples=max_samples,
                 shuffle_choices=shuffle_choices,
             )

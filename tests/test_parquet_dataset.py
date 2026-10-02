@@ -12,6 +12,7 @@ from yoda.data import (
     YodaParquetDataset,
     collate_decision_batch,
     match_target_to_constraints,
+    run_etl,
 )
 
 
@@ -122,3 +123,38 @@ def test_collate_decision_batch_with_parquet_dataset(mock_jsonl: Path, tmp_path:
     assert len(batch["constraints"]) == 2
     assert batch["target_indices"].shape == (2,)
     assert batch["task_scalars"].shape == (2, 1)
+
+
+def test_run_etl_caching_and_invalidation(mock_jsonl: Path, tmp_path: Path) -> None:
+    out_parquet = tmp_path / "cached.parquet"
+    meta_file = tmp_path / ".cached.parquet.meta.json"
+
+    # 1. Initial run: cache miss, produces parquet and meta
+    res1 = run_etl(input_path=mock_jsonl, output_path=out_parquet, max_choices=5)
+    assert res1 == out_parquet
+    assert out_parquet.exists()
+    assert meta_file.exists()
+    initial_mtime = out_parquet.stat().st_mtime_ns
+
+    # 2. Second run with same args: cache hit, file untouched
+    res2 = run_etl(input_path=mock_jsonl, output_path=out_parquet, max_choices=5)
+    assert res2 == out_parquet
+    assert out_parquet.stat().st_mtime_ns == initial_mtime
+
+    # 3. Argument mismatch (e.g. max_choices changed): cache invalidated and re-executed
+    res3 = run_etl(input_path=mock_jsonl, output_path=out_parquet, max_choices=4)
+    assert res3 == out_parquet
+    with meta_file.open("r", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["max_choices"] == 4
+
+    # 4. Input file modification: cache invalidated and re-executed
+    import time
+    time.sleep(0.01)
+    mock_jsonl.touch()
+    res4 = run_etl(input_path=mock_jsonl, output_path=out_parquet, max_choices=4)
+    assert res4 == out_parquet
+
+    # 5. Missing input file raises FileNotFoundError
+    with pytest.raises(FileNotFoundError):
+        run_etl(input_path=tmp_path / "nonexistent.jsonl")

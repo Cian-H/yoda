@@ -1,11 +1,10 @@
-"""CLI script executing offline ETL from JSONL to standardized columnar Parquet."""
+"""CLI script executing cached offline ETL from JSONL to standardized columnar Parquet."""
 
 import argparse
 import logging
-import time
 from pathlib import Path
 
-from yoda.data import ParquetETLPipeline
+from yoda.data import run_etl
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,7 +15,7 @@ logger = logging.getLogger("experiments.run_etl")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="ETL raw JSONL datasets into optimized Parquet tables."
+        description="ETL raw JSONL datasets into optimized Parquet tables with automatic caching."
     )
     parser.add_argument("--train-jsonl", type=str, default="data/processed/aggregated_train.jsonl")
     parser.add_argument("--eval-jsonl", type=str, default="data/processed/aggregated_eval.jsonl")
@@ -25,22 +24,20 @@ def main() -> None:
     parser.add_argument("--max-choices", type=int, default=5)
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--max-eval-samples", type=int, default=None)
+    parser.add_argument("--force", action="store_true", default=False, help="Force recomputation")
     args = parser.parse_args()
-
-    pipeline = ParquetETLPipeline(max_choices=args.max_choices)
 
     # 1. Transform training set
     train_in = Path(args.train_jsonl)
     train_out = Path(args.train_parquet)
     if train_in.exists():
-        t0 = time.time()
-        logger.info("Transforming %s -> %s...", str(train_in), str(train_out))
-        df_train = pipeline.transform_jsonl_to_parquet(
+        run_etl(
             input_path=train_in,
             output_path=train_out,
+            max_choices=args.max_choices,
             max_samples=args.max_train_samples,
+            force_recompute=args.force,
         )
-        logger.info("Transformed %d training rows in %.2fs", len(df_train), time.time() - t0)
     else:
         logger.warning("Training file not found: %s", str(train_in))
 
@@ -48,14 +45,13 @@ def main() -> None:
     eval_in = Path(args.eval_jsonl)
     eval_out = Path(args.eval_parquet)
     if eval_in.exists():
-        t0 = time.time()
-        logger.info("Transforming %s -> %s...", str(eval_in), str(eval_out))
-        df_eval = pipeline.transform_jsonl_to_parquet(
+        run_etl(
             input_path=eval_in,
             output_path=eval_out,
+            max_choices=args.max_choices,
             max_samples=args.max_eval_samples,
+            force_recompute=args.force,
         )
-        logger.info("Transformed %d evaluation rows in %.2fs", len(df_eval), time.time() - t0)
     else:
         logger.warning("Evaluation file not found: %s", str(eval_in))
 

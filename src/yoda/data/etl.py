@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 __all__: list[str] = [
     "ParquetETLPipeline",
     "match_target_to_constraints",
+    "run_etl",
 ]
 
 
@@ -186,3 +187,82 @@ class ParquetETLPipeline:
             extra={"output_path": str(dst_path), "rows": len(df)},
         )
         return df
+
+
+def run_etl(
+    input_path: Path | str,
+    output_path: Path | str | None = None,
+    max_choices: int = 5,
+    source: str | None = None,
+    question_type: str | None = None,
+    max_samples: int | None = None,
+    force_recompute: bool = False,
+) -> Path:
+    """Executes or retrieves cached Parquet transformation for a JSONL dataset.
+
+    Skips processing if the cached Parquet file exists and matches the call arguments
+    and input file modification timestamp.
+
+    Args:
+        input_path: Path to the raw JSONL dataset file.
+        output_path: Target Parquet file path (derived from input_path if None).
+        max_choices: Standardized choice options count.
+        source: Optional source filter.
+        question_type: Optional question type filter.
+        max_samples: Optional limit on processed samples.
+        force_recompute: If True, ignores cache and re-runs ETL.
+
+    Returns:
+        Path to the validated cached or freshly transformed Parquet file.
+    """
+    src = Path(input_path).resolve()
+    if not src.exists():
+        msg = f"Input dataset file not found: {src}"
+        logger.error("data.etl.input_not_found", extra={"input_path": str(src)})
+        raise FileNotFoundError(msg)
+
+    dst = src.with_suffix(".parquet") if output_path is None else Path(output_path).resolve()
+
+    meta_file = dst.parent / f".{dst.name}.meta.json"
+    src_mtime = src.stat().st_mtime
+
+    expected_meta: dict[str, Any] = {
+        "input_path": str(src),
+        "input_mtime": src_mtime,
+        "max_choices": max_choices,
+        "source": source,
+        "question_type": question_type,
+        "max_samples": max_samples,
+    }
+
+    if dst.exists() and meta_file.exists() and not force_recompute:
+        try:
+            with meta_file.open("r", encoding="utf-8") as f:
+                cached_meta = json.load(f)
+            if all(cached_meta.get(k) == v for k, v in expected_meta.items()):
+                logger.info(
+                    "data.etl.cache_hit",
+                    extra={"parquet_path": str(dst), "rows": cached_meta.get("num_rows")},
+                )
+                return dst
+            logger.info("data.etl.cache_invalidated", extra={"reason": "parameters_mismatch"})
+        except Exception:
+            logger.warning("data.etl.cache_read_failed", exc_info=True)
+
+    pipeline = ParquetETLPipeline(max_choices=max_choices)
+    df = pipeline.transform_jsonl_to_parquet(
+        input_path=src,
+        output_path=dst,
+        source=source,
+        question_type=question_type,
+        max_samples=max_samples,
+    )
+
+    expected_meta["num_rows"] = len(df)
+    try:
+        with meta_file.open("w", encoding="utf-8") as f:
+            json.dump(expected_meta, f, indent=2)
+    except Exception:
+        logger.warning("data.etl.meta_save_failed", exc_info=True)
+
+    return dst
