@@ -179,6 +179,7 @@ class YodaDecisionEngine(nn.Module):
         )
         self.state_encoder = SymbolicStateEncoder(self.text_encoder)
         self.constraint_encoder = ConstraintEncoder(self.text_encoder)
+        self.task_proj = nn.Linear(1, embed_dim, device=device, dtype=dtype)
 
         # Phase 2: Epistemic Pooling (Belnap MPA)
         self.q_mpa = BelnapMultiheadPooledAttention(
@@ -241,6 +242,7 @@ class YodaDecisionEngine(nn.Module):
         queries: list[str],
         states: list[dict[str, Any]],
         constraints: list[list[str]],
+        task_scalars: torch.Tensor | None = None,
         return_diagnostics: bool = False,
     ) -> dict[str, Any]:
         """Executes sequential epistemic reasoning over queries, states, and constraints.
@@ -249,6 +251,7 @@ class YodaDecisionEngine(nn.Module):
             queries: Batch of query text strings.
             states: Batch of symbolic state dictionaries.
             constraints: Batch of constraint string lists.
+            task_scalars: Optional batch of task scalars of shape `(batch_size, 1)`.
             return_diagnostics: If True, attaches intermediate stage trajectory and
                 attribution probes into the returned dictionary under `"diagnostics"`.
 
@@ -263,6 +266,12 @@ class YodaDecisionEngine(nn.Module):
         """
         # 1. Encoding
         q_emb = self.text_encoder(queries)
+        if task_scalars is not None:
+            task_vector = self.task_proj(task_scalars)
+            if q_emb.dim() == 3:
+                task_vector = task_vector.unsqueeze(1)
+            q_emb = q_emb + task_vector
+
         c_emb = self.state_encoder(states)
         k_emb = self.constraint_encoder(constraints)
 

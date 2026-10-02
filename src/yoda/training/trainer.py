@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from yoda.architecture.belnap_transformer import BelnapState
 from yoda.architecture.engine import YodaDecisionEngine
 from yoda.probabilistic.belnap import BelnapEvidence, FuzzyBelnapLoss
+from yoda.probabilistic.ltn import LTNConstraintLoss
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class YodaTrainer:
         optimizer: torch.optim.Optimizer | None = None,
         lr: float = 1e-3,
         belnap_weight: float = 0.1,
+        ltn_weight: float = 0.1,
         device: str | torch.device = "cpu",
     ) -> None:
         """Initializes YodaTrainer.
@@ -38,11 +40,13 @@ class YodaTrainer:
             optimizer: Torch optimizer; defaults to AdamW with specified learning rate.
             lr: Learning rate if default AdamW optimizer is instantiated.
             belnap_weight: Weight coefficient lambda for FuzzyBelnapLoss regularization.
+            ltn_weight: Weight coefficient for LTNConstraintLoss regularization.
             device: Target execution device.
         """
         self.device = torch.device(device) if isinstance(device, str) else device
         self.model = model.to(self.device)
         self.belnap_weight = float(belnap_weight)
+        self.ltn_weight = float(ltn_weight)
         self.optimizer = (
             optimizer
             if optimizer is not None
@@ -50,12 +54,14 @@ class YodaTrainer:
         )
         self.ce_loss_fn = nn.CrossEntropyLoss()
         self.belnap_loss_fn = FuzzyBelnapLoss(reduction="mean")
+        self.ltn_criterion = LTNConstraintLoss()
 
         logger.debug(
             "training.trainer.init",
             extra={
                 "device": str(self.device),
                 "belnap_weight": self.belnap_weight,
+                "ltn_weight": self.ltn_weight,
                 "lr": lr,
             },
         )
@@ -64,13 +70,18 @@ class YodaTrainer:
         self,
         batch: dict[str, Any],
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        """Computes joint CrossEntropy and Belnap loss along with batch accuracy metrics."""
+        """Computes joint CrossEntropy, Belnap loss, LTN loss, and batch accuracy metrics."""
         queries: list[str] = batch["queries"]
         states: list[dict[str, Any]] = batch["states"]
         constraints: list[list[str]] = batch["constraints"]
         target_indices: torch.Tensor = batch["target_indices"].to(self.device)
+        task_scalars: torch.Tensor | None = batch.get("task_scalars")
+        if task_scalars is not None:
+            task_scalars = task_scalars.to(self.device)
 
-        out = self.model(queries=queries, states=states, constraints=constraints)
+        out = self.model(
+            queries=queries, states=states, constraints=constraints, task_scalars=task_scalars
+        )
         logits = out["logits"]
         batch_size, num_choices = logits.shape
 
@@ -109,6 +120,13 @@ class YodaTrainer:
             belnap_loss = torch.tensor(0.0, device=self.device)
             total_loss = ce_loss
 
+        # 3. LTN constraint loss
+        if self.ltn_weight > 0.0:
+            ltn_loss = self.ltn_criterion(out, task_scalars)
+            total_loss = total_loss + self.ltn_weight * ltn_loss
+        else:
+            ltn_loss = torch.tensor(0.0, device=self.device)
+
         preds = out["choice"] if "choice" in out else torch.argmax(logits, dim=-1)
         correct = (preds == target_indices).sum().item()
         knowledge_mean = out["knowledge"].mean().item() if "knowledge" in out else 0.0
@@ -117,6 +135,7 @@ class YodaTrainer:
             "loss": total_loss.item(),
             "ce_loss": ce_loss.item(),
             "belnap_loss": belnap_loss.item(),
+            "ltn_loss": ltn_loss.item(),
             "correct": float(correct),
             "total": float(batch_size),
             "knowledge_sum": float(knowledge_mean * batch_size),
@@ -130,12 +149,13 @@ class YodaTrainer:
             dataloader: DataLoader yielding decision batches.
 
         Returns:
-            Dictionary with average loss, ce_loss, belnap_loss, and accuracy.
+            Dictionary with average loss, ce_loss, belnap_loss, ltn_loss, and accuracy.
         """
         self.model.train()
         total_loss = 0.0
         total_ce_loss = 0.0
         total_belnap_loss = 0.0
+        total_ltn_loss = 0.0
         total_correct = 0.0
         total_samples = 0.0
         total_knowledge = 0.0
@@ -150,6 +170,7 @@ class YodaTrainer:
             total_loss += metrics["loss"] * b_size
             total_ce_loss += metrics["ce_loss"] * b_size
             total_belnap_loss += metrics["belnap_loss"] * b_size
+            total_ltn_loss += metrics["ltn_loss"] * b_size
             total_correct += metrics["correct"]
             total_samples += b_size
             total_knowledge += metrics["knowledge_sum"]
@@ -159,6 +180,7 @@ class YodaTrainer:
                 "loss": 0.0,
                 "ce_loss": 0.0,
                 "belnap_loss": 0.0,
+                "ltn_loss": 0.0,
                 "accuracy": 0.0,
                 "mean_knowledge": 0.0,
             }
@@ -167,6 +189,7 @@ class YodaTrainer:
             "loss": total_loss / total_samples,
             "ce_loss": total_ce_loss / total_samples,
             "belnap_loss": total_belnap_loss / total_samples,
+            "ltn_loss": total_ltn_loss / total_samples,
             "accuracy": total_correct / total_samples,
             "mean_knowledge": total_knowledge / total_samples,
         }
@@ -178,12 +201,13 @@ class YodaTrainer:
             dataloader: DataLoader yielding evaluation decision batches.
 
         Returns:
-            Dictionary with eval loss, ce_loss, belnap_loss, accuracy, and mean_knowledge.
+            Dictionary with eval loss, ce_loss, belnap_loss, ltn_loss, accuracy, and mean_knowledge.
         """
         self.model.eval()
         total_loss = 0.0
         total_ce_loss = 0.0
         total_belnap_loss = 0.0
+        total_ltn_loss = 0.0
         total_correct = 0.0
         total_samples = 0.0
         total_knowledge = 0.0
@@ -195,6 +219,7 @@ class YodaTrainer:
                 total_loss += metrics["loss"] * b_size
                 total_ce_loss += metrics["ce_loss"] * b_size
                 total_belnap_loss += metrics["belnap_loss"] * b_size
+                total_ltn_loss += metrics["ltn_loss"] * b_size
                 total_correct += metrics["correct"]
                 total_samples += b_size
                 total_knowledge += metrics["knowledge_sum"]
@@ -204,6 +229,7 @@ class YodaTrainer:
                 "loss": 0.0,
                 "ce_loss": 0.0,
                 "belnap_loss": 0.0,
+                "ltn_loss": 0.0,
                 "accuracy": 0.0,
                 "mean_knowledge": 0.0,
             }
@@ -212,6 +238,7 @@ class YodaTrainer:
             "loss": total_loss / total_samples,
             "ce_loss": total_ce_loss / total_samples,
             "belnap_loss": total_belnap_loss / total_samples,
+            "ltn_loss": total_ltn_loss / total_samples,
             "accuracy": total_correct / total_samples,
             "mean_knowledge": total_knowledge / total_samples,
         }
