@@ -153,7 +153,7 @@ class YodaDecisionEngine(nn.Module):
     def __init__(
         self,
         text_model_name: str = "dummy",
-        embed_dim: int = 256,
+        embed_dim: int | None = None,
         num_q_probes: int = 4,
         num_c_probes: int = 16,
         num_k_probes: int = 8,
@@ -168,7 +168,7 @@ class YodaDecisionEngine(nn.Module):
 
         Args:
             text_model_name: Name of text backbone model or "dummy" for fast unit testing.
-            embed_dim: Dimension of latent embedding space.
+            embed_dim: Dimension of latent embedding space. If None, adopts native encoder dim.
             num_q_probes: Number of query epistemic probe tokens for Belnap MPA.
             num_c_probes: Number of context epistemic probe tokens for Belnap MPA.
             num_k_probes: Number of constraint epistemic probe tokens for Belnap MPA.
@@ -181,7 +181,6 @@ class YodaDecisionEngine(nn.Module):
         """
         super().__init__()
         self.text_model_name = text_model_name
-        self.embed_dim = embed_dim
         self.num_q_probes = num_q_probes
         self.num_c_probes = num_c_probes
         self.num_k_probes = num_k_probes
@@ -197,33 +196,36 @@ class YodaDecisionEngine(nn.Module):
             device=device,
             dtype=dtype,
         )
+        effective_dim = self.text_encoder.dim
+        self.embed_dim = effective_dim
+
         self.state_encoder = SymbolicStateEncoder(self.text_encoder)
         self.constraint_encoder = ConstraintEncoder(self.text_encoder)
-        self.cand_proj = nn.Linear(embed_dim, 2 * embed_dim, device=device, dtype=dtype)
+        self.cand_proj = nn.Linear(effective_dim, 2 * effective_dim, device=device, dtype=dtype)
         # Project task scalar (-1.0, 0.0, 1.0) into expressive latent space
         self.task_proj = nn.Sequential(
-            nn.Linear(1, embed_dim, device=device, dtype=dtype),
+            nn.Linear(1, effective_dim, device=device, dtype=dtype),
             nn.Mish(),
-            nn.Linear(embed_dim, embed_dim, device=device, dtype=dtype),
+            nn.Linear(effective_dim, effective_dim, device=device, dtype=dtype),
         )
 
         # Phase 2: Epistemic Pooling (Belnap MPA)
         self.q_mpa = BelnapMultiheadPooledAttention(
-            embed_dim=embed_dim,
+            embed_dim=effective_dim,
             num_queries=num_q_probes,
             num_heads=n_heads,
             device=device,
             dtype=dtype,
         )
         self.c_mpa = BelnapMultiheadPooledAttention(
-            embed_dim=embed_dim,
+            embed_dim=effective_dim,
             num_queries=num_c_probes,
             num_heads=n_heads,
             device=device,
             dtype=dtype,
         )
         self.k_mpa = BelnapMultiheadPooledAttention(
-            embed_dim=embed_dim,
+            embed_dim=effective_dim,
             num_queries=num_k_probes,
             num_heads=n_heads,
             device=device,
@@ -232,32 +234,33 @@ class YodaDecisionEngine(nn.Module):
 
         # Phase 3: Reasoning Core (Cascaded Cross-Attention)
         self.context_reasoning = BelnapTransformerBlock(
-            d_model=embed_dim,
+            d_model=effective_dim,
             n_heads=n_heads,
             residual_weight=residual_weight,
         )
         self.constraint_reasoning = BelnapTransformerBlock(
-            d_model=embed_dim,
+            d_model=effective_dim,
             n_heads=n_heads,
             residual_weight=residual_weight,
         )
 
         # Phase 4: Judgment
         self.decision_head = BelnapDecisionHead(
-            d_model=embed_dim,
+            d_model=effective_dim,
             num_choices=num_choices,
             device=device,
             dtype=dtype,
         )
         if num_choices != 1:
             self.scalar_head = BelnapDecisionHead(
-                d_model=embed_dim,
+                d_model=effective_dim,
                 num_choices=1,
                 device=device,
                 dtype=dtype,
             )
         else:
             self.scalar_head = self.decision_head
+
 
         logger.debug(
             "architecture.yoda_decision_engine.init",
