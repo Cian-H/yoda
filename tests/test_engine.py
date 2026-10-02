@@ -1,9 +1,11 @@
 """Tests for top-level YodaDecisionEngine and BelnapDecisionHead."""
 
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from torch import nn
 
 from yoda.architecture.belnap_transformer import BelnapState
 from yoda.architecture.engine import BelnapDecisionHead, YodaDecisionEngine
@@ -303,6 +305,31 @@ class TestYodaDecisionEngine:
         loss.backward()
         assert affinity_engine.cand_proj.weight.grad is not None
         assert not torch.isnan(affinity_engine.cand_proj.weight.grad).any()
+
+    def test_native_encoder_dimension_adoption(self) -> None:
+        """Verifies engine adopts native full encoder dimension with Identity adapter.
+
+        Applies when embed_dim is None.
+        """
+        mock_tokenizer = MagicMock()
+        mock_model = MagicMock()
+        mock_model.config.hidden_size = 384
+        mock_model.to.return_value = mock_model
+
+        with (
+            patch("transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer),
+            patch("transformers.AutoModel.from_pretrained", return_value=mock_model),
+        ):
+            engine = YodaDecisionEngine(text_model_name="mock-transformer", embed_dim=None)
+            assert engine.embed_dim == 384
+            assert isinstance(engine.text_encoder.adapter, nn.Identity)
+            assert engine.q_mpa.input_proj.in_features == 384
+            assert engine.c_mpa.input_proj.in_features == 384
+            assert engine.k_mpa.input_proj.in_features == 384
+            assert engine.context_reasoning.d_model == 384
+            assert engine.constraint_reasoning.d_model == 384
+            assert engine.decision_head.d_model == 384
+
 
 
 def test_architecture_package_exports() -> None:

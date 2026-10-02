@@ -20,5 +20,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0011](./0011-active-criteria-masking-and-candidate-affinity.md) | Active Criteria Masking and Dynamic Candidate Epistemic Affinity Scoring | Superseded by ADR-0013 | 2026-10-02 |
 | [0012](./0012-focal-margin-loss-and-onecycle-lr-scheduling.md) | Focal-Margin Loss Hybrid and OneCycleLR Annealing | Accepted | 2026-10-02 |
 | [0013](./0013-independent-choice-assessment-architecture.md) | Independent Choice Assessment Architecture | Accepted | 2026-10-02 |
+| [0014](./0014-native-full-embedding-dimension.md) | Native Full Embedding Dimension Directly into Belnap MPA | Accepted | 2026-10-02 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)

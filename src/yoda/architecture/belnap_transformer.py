@@ -264,6 +264,7 @@ class BelnapTransformerBlock(nn.Module):
             residual_weight: Interpolation weight alpha for convex combination residual join.
         """
         super().__init__()
+        self.d_model = d_model
         self.residual_weight = residual_weight
         self.self_attn = BelnapAttention(d_model=d_model, n_heads=n_heads)
         self.cross_attn = BelnapAttention(d_model=d_model, n_heads=n_heads)
