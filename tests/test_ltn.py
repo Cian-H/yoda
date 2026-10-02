@@ -54,12 +54,12 @@ def test_ltn_constraint_loss_forward():
     # Expected ME Loss:
     # Batch 0: no mask
     # Batch 1: no mask
-    # Batch 2: masked -> sum(0.1, 0.2, 0.1)^2 - sum(0.01, 0.04, 0.01) = 0.16 - 0.06 = 0.10
-    # Batch 3: masked -> sum(0.9, 0.8, 0.7)^2 - sum(0.81, 0.64, 0.49) = 5.76 - 1.94 = 3.82
-    # Mean ME over batch (4) = (0.10 + 3.82) / 4 = 3.92 / 4 = 0.98
+    # Batch 2: masked -> overlap=0.10, existence=(0.4-1.0)^2=0.36 -> 0.46
+    # Batch 3: masked -> overlap=3.82, existence=(2.4-1.0)^2=1.96 -> 5.78
+    # Mean ME over batch (4) = (0.46 + 5.78) / 4 = 6.24 / 4 = 1.56
+    # Total expected loss = 0.3125 (NC) + 1.56 (ME) = 1.8725
 
-    # Total = 0.3125 + 0.98 = 1.2925
-    assert torch.allclose(loss, torch.tensor(1.2925))
+    assert torch.allclose(loss, torch.tensor(1.8725))
 
 def test_ltn_constraint_loss_without_task_scalars():
     criterion = LTNConstraintLoss()
