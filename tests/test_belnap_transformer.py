@@ -199,6 +199,34 @@ class TestBelnapTransformerBlock:
         assert out.e_pos.shape == (2, 5, 32)
         assert torch.all(out.knowledge >= 0.0) and torch.all(out.knowledge <= 1.0)
 
+    def test_residual_join_convex_combination(self) -> None:
+        """Verifies that residual join uses convex combination to guarantee [0, 1] bounds
+        and maintain non-zero gradients even when base + delta > 1.0.
+        """
+        block = BelnapTransformerBlock(d_model=32, n_heads=4, residual_weight=0.5)
+        base = BelnapState(
+            e_pos=torch.full((2, 3, 32), 0.9, requires_grad=True),
+            e_neg=torch.full((2, 3, 32), 0.8, requires_grad=True),
+        )
+        delta = BelnapState(
+            e_pos=torch.full((2, 3, 32), 0.7),
+            e_neg=torch.full((2, 3, 32), 0.6),
+        )
+
+        res = block._residual_join(base, delta, alpha=0.5)
+
+        # In old clamp implementation, base.e_pos (0.9) + delta.e_pos (0.7) = 1.6 -> clamped to 1.0.
+        # In convex combination, 0.5 * 0.9 + 0.5 * 0.7 = 0.8.
+        assert torch.allclose(res.e_pos, torch.tensor(0.8))
+        assert torch.allclose(res.e_neg, torch.tensor(0.7))
+        assert torch.all(res.e_pos >= 0.0) and torch.all(res.e_pos <= 1.0)
+        assert torch.all(res.e_neg >= 0.0) and torch.all(res.e_neg <= 1.0)
+
+        # Verify gradient is non-zero (unlike clamp which has 0 gradient at saturated ceiling)
+        res.e_pos.sum().backward()
+        assert base.e_pos.grad is not None
+        assert torch.allclose(base.e_pos.grad, torch.tensor(0.5))
+
 
 class TestBelnapDecisionTransformer:
     """Verifies the end-to-end multi-branch Belnap Decision Transformer."""
