@@ -227,6 +227,83 @@ class TestYodaDecisionEngine:
         )
         assert torch.allclose(aligned_diag["attributions"].sum(dim=0), aligned_out["logits"])
 
+    def test_forward_pass_with_variable_criteria_masking(
+        self, dummy_engine: YodaDecisionEngine
+    ) -> None:
+        """Verifies that variable criteria are masked out from logits, truth, and knowledge."""
+        queries = ["query 1", "query 2"]
+        states = [{"state": 1}, {"state": 2}]
+        # Sample 0 has 2 active choices, sample 1 has 3 active choices (padded to 5)
+        constraints = [
+            [
+                "opt_a: A",
+                "opt_b: B",
+                "none: Unused option",
+                "none: Unused option",
+                "none: Unused option",
+            ],
+            ["opt_1: 1", "opt_2: 2", "opt_3: 3", "none: Unused option", "none: Unused option"],
+        ]
+
+        out = dummy_engine(queries=queries, states=states, constraints=constraints)
+
+        assert "active_mask" in out
+        active_mask = out["active_mask"]
+        assert active_mask[0].tolist() == [True, True, False, False, False]
+        assert active_mask[1].tolist() == [True, True, True, False, False]
+
+        # Logits for inactive positions should be heavily negative (-1e9)
+        assert torch.all(out["logits"][0, 2:] <= -1e8)
+        assert torch.all(out["logits"][1, 3:] <= -1e8)
+
+        # Inactive truth and knowledge must be exactly 0.0 (ignorance)
+        assert torch.all(out["truth"][0, 2:] == 0.0)
+        assert torch.all(out["knowledge"][0, 2:] == 0.0)
+        assert torch.all(out["truth"][1, 3:] == 0.0)
+        assert torch.all(out["knowledge"][1, 3:] == 0.0)
+
+        # Choice must be within active criteria
+        assert out["choice"][0].item() in [0, 1]
+        assert out["choice"][1].item() in [0, 1, 2]
+
+    def test_dynamic_candidate_affinity_scoring(self) -> None:
+        """Verifies dynamic candidate affinity scoring across variable candidate counts."""
+        affinity_engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_q_probes=2,
+            num_c_probes=4,
+            num_k_probes=4,
+            num_choices=5,
+            n_heads=2,
+            use_candidate_affinity=True,
+        )
+
+        queries = ["choose target"]
+        states = [{"sensor": 5}]
+        constraints = [
+            [
+                "crit_1: Alpha",
+                "crit_2: Beta",
+                "crit_3: Gamma",
+                "none: Unused option",
+                "none: Unused option",
+            ]
+        ]
+
+        out = affinity_engine(queries=queries, states=states, constraints=constraints)
+
+        assert out["logits"].shape == (1, 5)
+        assert out["choice"].shape == (1,)
+        assert out["choice"].item() in [0, 1, 2]
+        assert torch.all(out["logits"][0, 3:] <= -1e8)
+
+        # Verify gradient flow
+        loss = out["logits"].sum()
+        loss.backward()
+        assert affinity_engine.cand_proj.weight.grad is not None
+        assert not torch.isnan(affinity_engine.cand_proj.weight.grad).any()
+
 
 def test_architecture_package_exports() -> None:
     """Verifies that YodaDecisionEngine and BelnapDecisionHead are exported from architecture."""

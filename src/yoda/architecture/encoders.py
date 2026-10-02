@@ -109,6 +109,37 @@ class ConstraintEncoder(nn.Module):
             return "none"
         return " || ".join(constraints)
 
+    def encode_candidates(self, constraints_batch: list[list[str]]) -> torch.Tensor:
+        """Encodes each candidate criterion individually into candidate embeddings.
+
+        Args:
+            constraints_batch: Batch of constraint/choice lists of shape
+                `[batch_size, num_candidates]`.
+
+        Returns:
+            Candidate embedding tensor of shape (batch_size, num_candidates, target_dim).
+        """
+        batch_size = len(constraints_batch)
+        if batch_size == 0:
+            dim = self.text_encoder.dim
+            device = self.text_encoder.device or torch.device("cpu")
+            return torch.empty((0, 0, dim), device=device)
+
+        max_candidates = max((len(s) for s in constraints_batch), default=0)
+        if max_candidates == 0:
+            dim = self.text_encoder.dim
+            device = self.text_encoder.device or torch.device("cpu")
+            return torch.empty((batch_size, 0, dim), device=device)
+
+        padded_batch = [
+            list(s) + ["none: Unused option"] * (max_candidates - len(s)) for s in constraints_batch
+        ]
+
+        flat_candidates = [c for sample in padded_batch for c in sample]
+        cand_seq = self.text_encoder(flat_candidates)
+        cand_pooled = cand_seq.mean(dim=1)
+        return cand_pooled.view(batch_size, max_candidates, -1)
+
     def forward(self, constraints_batch: list[list[str]]) -> torch.Tensor:
         """Encodes batches of constraints by joining them with a separator."""
         formatted = [self._format_constraints(c) for c in constraints_batch]
