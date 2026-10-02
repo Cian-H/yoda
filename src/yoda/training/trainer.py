@@ -115,17 +115,18 @@ class YodaTrainer:
                 pred_evidence = BelnapEvidence(t=choice_state.e_pos, f=choice_state.e_neg)
 
             belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
-            total_loss = ce_loss + self.belnap_weight * belnap_loss
+            base_loss = ce_loss + self.belnap_weight * belnap_loss
         else:
             belnap_loss = torch.tensor(0.0, device=self.device)
-            total_loss = ce_loss
+            base_loss = ce_loss
 
-        # 3. LTN constraint loss
+        # 3. LTN constraint loss (Multiplicative)
         if self.ltn_weight > 0.0:
             ltn_loss = self.ltn_criterion(out, task_scalars)
-            total_loss = total_loss + self.ltn_weight * ltn_loss
+            total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)
+            total_loss = base_loss
 
         preds = out["choice"] if "choice" in out else torch.argmax(logits, dim=-1)
         correct = (preds == target_indices).sum().item()
