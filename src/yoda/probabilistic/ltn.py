@@ -32,12 +32,16 @@ class LTNConstraintLoss(nn.Module):
         me_loss = torch.tensor(0.0, device=choice_pos.device, dtype=choice_pos.dtype)
         if task_scalars is not None:
             truth = outputs["truth"]
-            # Mutual Exclusivity Loss: truth values should not overlap heavily
-            # for multiple choice tasks.
-            # sum_{i!=j} (t_i * t_j) = (sum_i t_i)^2 - sum_i (t_i^2)
+            # Mutual Exclusivity & Existential Constraint:
+            # 1. Truths shouldn't heavily overlap: sum_{i!=j} t_i * t_j
+            # 2. At least one choice MUST be true: sum(t_i) should be close to 1.0
             sum_t = truth.sum(dim=-1)
             sum_t_sq = (truth ** 2).sum(dim=-1)
-            me_loss_per_batch = sum_t ** 2 - sum_t_sq
+            
+            overlap_penalty = sum_t ** 2 - sum_t_sq
+            existence_penalty = (sum_t - 1.0) ** 2
+            
+            me_loss_per_batch = overlap_penalty + existence_penalty
 
             task_mask = (task_scalars > 0.5).float().squeeze(-1)
             me_loss = (me_loss_per_batch * task_mask).mean()
