@@ -179,7 +179,12 @@ class YodaDecisionEngine(nn.Module):
         )
         self.state_encoder = SymbolicStateEncoder(self.text_encoder)
         self.constraint_encoder = ConstraintEncoder(self.text_encoder)
-        self.task_proj = nn.Linear(1, embed_dim, device=device, dtype=dtype)
+        # Project task scalar (-1.0, 0.0, 1.0) into expressive latent space
+        self.task_proj = nn.Sequential(
+            nn.Linear(1, embed_dim, device=device, dtype=dtype),
+            nn.Mish(),
+            nn.Linear(embed_dim, embed_dim, device=device, dtype=dtype),
+        )
 
         # Phase 2: Epistemic Pooling (Belnap MPA)
         self.q_mpa = BelnapMultiheadPooledAttention(
