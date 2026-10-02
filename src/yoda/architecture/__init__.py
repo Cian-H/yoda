@@ -1,5 +1,6 @@
 """Architecture components and schema definitions for yoda."""
 
+from yoda.architecture.activations import SoftExp
 from yoda.architecture.attention import (
     BelnapMultiheadPooledAttention,
     MultiheadPooledAttention,
@@ -34,6 +35,7 @@ __all__: list[str] = [
     "DecisionPayload",
     "MultiheadPooledAttention",
     "QueryContext",
+    "SoftExp",
     "SymbolicStateEncoder",
     "TextEncoder",
     "YodaDecisionEngine",

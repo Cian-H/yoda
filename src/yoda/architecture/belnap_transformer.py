@@ -78,7 +78,7 @@ class BelnapAttention(nn.Module):
         d_model: int,
         n_heads: int = 4,
         bias: bool = True,
-        init_bias: float = -3.0,
+        init_bias: float = 0.0,
     ) -> None:
         """Initializes BelnapAttention.
 
@@ -86,8 +86,7 @@ class BelnapAttention(nn.Module):
             d_model: Dimensionality of input evidence representations.
             n_heads: Number of attention heads.
             bias: Whether linear projection layers include bias.
-            init_bias: Initial negative bias for output evidence projections,
-                encoding prior absence of evidence (Neither / uninformative).
+            init_bias: Initial bias for output evidence projections. Defaults to 0.0.
         """
         super().__init__()
         if d_model % n_heads != 0:
@@ -187,8 +186,9 @@ class BelnapAttention(nn.Module):
         # Step 3: Knowledge Gating by source token intrinsic knowledge
         # Intrinsic knowledge mass per source token: k_src in [0, 1]
         k_src = kv.knowledge.mean(dim=-1).unsqueeze(1).unsqueeze(2)  # (B, 1, 1, L_kv)
-        a_pos = torch.sigmoid(s_pos) * k_src
-        a_neg = torch.sigmoid(s_neg) * k_src
+        k_gate = 0.5 + 0.5 * k_src
+        a_pos = torch.sigmoid(s_pos) * k_gate
+        a_neg = torch.sigmoid(s_neg) * k_gate
 
         # Step 4: Evidence Aggregation
         agg_pos = torch.matmul(a_pos, v_pos)  # (B, H, L_q, d_k)
@@ -235,8 +235,8 @@ class BelnapFFN(nn.Module):
         # 1. Conflation operator resolves conflicting evidence
         x_res = x.conflate(self.conflation_weight)
 
-        # 2. Hidden expansion
-        h_mid = nn.functional.gelu(self.w_1(x_res.e_pos) + self.w_2(x_res.e_neg))
+        # 2. Hidden expansion with smooth Mish activation
+        h_mid = nn.functional.mish(self.w_1(x_res.e_pos) + self.w_2(x_res.e_neg))
 
         # 3. Output projections bounded in [0, 1]
         e_ffn_pos = torch.sigmoid(self.w_o1(h_mid))

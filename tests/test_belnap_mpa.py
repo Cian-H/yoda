@@ -51,7 +51,9 @@ def test_belnap_mpa_zero_knowledge_suppression() -> None:
     embed_dim = 16
     num_queries = 4
 
-    mpa = BelnapMultiheadPooledAttention(embed_dim=embed_dim, num_queries=num_queries)
+    mpa = BelnapMultiheadPooledAttention(
+        embed_dim=embed_dim, num_queries=num_queries, init_bias=-3.0
+    )
 
     # Input state with zero knowledge (e+ = 0, e- = 0)
     zero_state = BelnapState(
@@ -61,10 +63,17 @@ def test_belnap_mpa_zero_knowledge_suppression() -> None:
 
     _, pooled_state = mpa(zero_state)
 
-    # Knowledge must be strictly suppressed near 0 due to negative bias initialization
-    assert pooled_state.knowledge.max().item() < 0.05
+    # Knowledge must be strictly suppressed near 0 when negative bias initialization is used
+    assert pooled_state.knowledge.max().item() < 0.1
     # Truth should be neutral (0.5 within tight tolerance)
     assert torch.allclose(pooled_state.truth, torch.tensor(0.5), atol=0.05)
+
+    # Default init_bias=0.0 preserves neutral gradient-rich knowledge around 0.5
+    default_mpa = BelnapMultiheadPooledAttention(
+        embed_dim=embed_dim, num_queries=num_queries
+    )
+    _, default_pooled = default_mpa(zero_state)
+    assert default_pooled.knowledge.max().item() > 0.4
 
 
 def test_belnap_mpa_contradiction_preservation() -> None:

@@ -103,15 +103,18 @@ class BelnapDecisionHead(nn.Module):
 
             choice_pos = torch.sigmoid(pos_affinity)
             choice_neg = torch.sigmoid(neg_affinity)
+            logits = pos_affinity - neg_affinity
         else:
-            choice_pos = torch.sigmoid(self.w_pos(pooled_pos))
-            choice_neg = torch.sigmoid(self.w_neg(pooled_neg))
+            raw_pos = self.w_pos(pooled_pos)
+            raw_neg = self.w_neg(pooled_neg)
+            choice_pos = torch.sigmoid(raw_pos)
+            choice_neg = torch.sigmoid(raw_neg)
+            logits = raw_pos - raw_neg
 
         choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
         truth = choice_state.truth
         knowledge = choice_state.knowledge
 
-        logits = (choice_pos - choice_neg) * knowledge
         choice = torch.argmax(logits, dim=-1)
 
         return {

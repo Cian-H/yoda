@@ -115,8 +115,10 @@ class TestBelnapAttention:
         assert torch.all(out_state.truth >= 0.0) and torch.all(out_state.truth <= 1.0)
         assert torch.all(out_state.knowledge >= 0.0) and torch.all(out_state.knowledge <= 1.0)
 
-    def test_zero_knowledge_suppression(self, attn_layer: BelnapAttention) -> None:
-        """Verifies that completely unknown context (k=0) suppresses attention output to Neither."""
+    def test_zero_knowledge_suppression(self) -> None:
+        """Verifies that completely unknown context (k=0) suppresses attention output
+        to Neither when negative bias is configured.
+        """
         batch_size = 1
         l_q = 2
         l_kv = 4
@@ -132,12 +134,18 @@ class TestBelnapAttention:
             e_neg=torch.zeros(batch_size, l_kv, d_model),
         )
 
-        out_state = attn_layer(q_state, kv_state)
+        suppressed_layer = BelnapAttention(d_model=d_model, n_heads=4, init_bias=-3.0)
+        out_state = suppressed_layer(q_state, kv_state)
 
         # Output knowledge should collapse toward zero (Neither / uninformative)
         assert torch.mean(out_state.knowledge) < 0.1
         # Truth should hover at 0.5 (neutral indifference)
         assert torch.allclose(out_state.truth, torch.tensor(0.5), atol=0.2)
+
+        # Default init_bias=0.0 preserves neutral gradient-rich knowledge around 0.5
+        default_layer = BelnapAttention(d_model=d_model, n_heads=4)
+        out_default = default_layer(q_state, kv_state)
+        assert torch.mean(out_default.knowledge) > 0.4
 
     def test_gradient_flow(self, attn_layer: BelnapAttention) -> None:
         """Verifies end-to-end backpropagation through dual evidence paths."""
