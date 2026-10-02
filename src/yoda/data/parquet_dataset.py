@@ -80,7 +80,7 @@ class YodaParquetDataset(Dataset[dict[str, Any]]):
         # Parse lightweight JSON state
         try:
             state = json.loads(self._state_jsons[idx])
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             state = {}
 
         return {
@@ -89,4 +89,5 @@ class YodaParquetDataset(Dataset[dict[str, Any]]):
             "constraints": final_choices,
             "target_idx": new_target_idx,
             "task_scalar": self._task_scalars[idx],
+            "num_active": num_active,
         }

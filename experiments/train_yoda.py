@@ -196,8 +196,10 @@ def main() -> None:
             for param in model.text_encoder.model.parameters():
                 param.requires_grad = False
 
-            if args.unfreeze_top_layer and hasattr(model.text_encoder.model, "encoder") and hasattr(
-                model.text_encoder.model.encoder, "layer"
+            if (
+                args.unfreeze_top_layer
+                and hasattr(model.text_encoder.model, "encoder")
+                and hasattr(model.text_encoder.model.encoder, "layer")
             ):
                 for param in model.text_encoder.model.encoder.layer[-1].parameters():
                     param.requires_grad = True

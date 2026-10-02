@@ -257,6 +257,38 @@ class TestCollateDecisionBatch:
         assert batch["target_indices"].shape == (2,)
         assert batch["target_indices"].dtype == torch.long
         assert batch["target_indices"].tolist() == [2, 0]
+        assert "num_active" in batch
+        assert "active_mask" in batch
+
+    def test_collate_with_variable_criteria(self) -> None:
+        """Verifies active_mask generation with variable criteria counts."""
+        batch_samples = [
+            {
+                "query": "Q1",
+                "state": {},
+                "constraints": [
+                    "c0",
+                    "c1",
+                    "none: Unused option",
+                    "none: Unused option",
+                    "none: Unused option",
+                ],
+                "target_idx": 1,
+                "num_active": 2,
+            },
+            {
+                "query": "Q2",
+                "state": {},
+                "constraints": ["c0", "c1", "c2", "c3", "none: Unused option"],
+                "target_idx": 3,
+                "num_active": 4,
+            },
+        ]
+        batch = collate_decision_batch(batch_samples)
+        assert batch["num_active"].tolist() == [2, 4]
+        assert batch["active_mask"].shape == (2, 5)
+        assert batch["active_mask"][0].tolist() == [True, True, False, False, False]
+        assert batch["active_mask"][1].tolist() == [True, True, True, True, False]
 
 
 class TestYodaTrainer:

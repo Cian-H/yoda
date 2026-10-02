@@ -141,6 +141,7 @@ class YodaDecisionEngine(nn.Module):
         num_choices: int = 5,
         n_heads: int = 4,
         residual_weight: float = 0.5,
+        use_candidate_affinity: bool = False,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -155,6 +156,7 @@ class YodaDecisionEngine(nn.Module):
             num_choices: Number of decision choices.
             n_heads: Number of attention heads for Belnap attention and transformer blocks.
             residual_weight: Interpolation weight alpha for convex combination residual joins.
+            use_candidate_affinity: If True, uses dynamic bilateral candidate affinity scoring.
             device: Target execution device.
             dtype: Target execution data type.
         """
@@ -167,6 +169,7 @@ class YodaDecisionEngine(nn.Module):
         self.num_choices = num_choices
         self.n_heads = n_heads
         self.residual_weight = residual_weight
+        self.use_candidate_affinity = use_candidate_affinity
 
         # Phase 1: Encoders
         self.text_encoder = TextEncoder(
@@ -177,6 +180,7 @@ class YodaDecisionEngine(nn.Module):
         )
         self.state_encoder = SymbolicStateEncoder(self.text_encoder)
         self.constraint_encoder = ConstraintEncoder(self.text_encoder)
+        self.cand_proj = nn.Linear(embed_dim, 2 * embed_dim, device=device, dtype=dtype)
         # Project task scalar (-1.0, 0.0, 1.0) into expressive latent space
         self.task_proj = nn.Sequential(
             nn.Linear(1, embed_dim, device=device, dtype=dtype),
@@ -246,6 +250,7 @@ class YodaDecisionEngine(nn.Module):
         states: list[dict[str, Any]],
         constraints: list[list[str]],
         task_scalars: torch.Tensor | None = None,
+        active_mask: torch.Tensor | None = None,
         return_diagnostics: bool = False,
     ) -> dict[str, Any]:
         """Executes sequential epistemic reasoning over queries, states, and constraints.
@@ -255,6 +260,8 @@ class YodaDecisionEngine(nn.Module):
             states: Batch of symbolic state dictionaries.
             constraints: Batch of constraint string lists.
             task_scalars: Optional batch of task scalars of shape `(batch_size, 1)`.
+            active_mask: Optional boolean tensor of shape `(batch_size, num_choices)`
+                marking valid active criteria.
             return_diagnostics: If True, attaches intermediate stage trajectory and
                 attribution probes into the returned dictionary under `"diagnostics"`.
 
@@ -265,6 +272,9 @@ class YodaDecisionEngine(nn.Module):
             - `knowledge`: Choice knowledge coordinates in [0, 1] of shape
                 `(batch_size, num_choices)`.
             - `choice`: Selected choice indices of shape `(batch_size,)`.
+            - `choice_pos`: Positive evidence coordinates of shape `(batch_size, num_choices)`.
+            - `choice_neg`: Negative evidence coordinates of shape `(batch_size, num_choices)`.
+            - `active_mask`: (Optional) Boolean mask of shape `(batch_size, num_choices)`.
             - `diagnostics`: (Optional) Intermediate DLA stage trajectories and attributions.
         """
         # 1. Encoding
@@ -284,7 +294,12 @@ class YodaDecisionEngine(nn.Module):
         _, k_state = self.k_mpa(k_emb)
 
         # 3. Reasoning (Sequential Interrogation) & Diagnostics Interception
-        cand_states = k_state if k_state.e_pos.size(1) == self.num_choices else None
+        if self.use_candidate_affinity and len(constraints) > 0 and len(constraints[0]) > 0:
+            cand_embs = self.constraint_encoder.encode_candidates(constraints)
+            pos_raw, neg_raw = torch.sigmoid(self.cand_proj(cand_embs)).chunk(2, dim=-1)
+            cand_states = BelnapState(e_pos=pos_raw, e_neg=neg_raw)
+        else:
+            cand_states = k_state if k_state.e_pos.size(1) == self.num_choices else None
 
         # Stage 0: Post-Pooling
         x_0 = q_state
@@ -297,11 +312,47 @@ class YodaDecisionEngine(nn.Module):
 
         # 4. Final Judgment
         final_out = self.decision_head(x_2, candidate_states=cand_states)
+        device = final_out["logits"].device
+
+        _batch_size, num_out_choices = final_out["logits"].shape
+        if active_mask is None and len(constraints) > 0:
+            mask_list: list[list[bool]] = []
+            for sample in constraints:
+                sample_len = len(sample)
+                row = []
+                for c_idx in range(num_out_choices):
+                    if c_idx < sample_len:
+                        c_str = str(sample[c_idx])
+                        row.append(not c_str.startswith("none:"))
+                    else:
+                        row.append(False)
+                mask_list.append(row)
+            active_mask = torch.tensor(mask_list, device=device, dtype=torch.bool)
+        elif active_mask is not None:
+            active_mask = active_mask.to(device=device)
+
+        if active_mask is not None and active_mask.numel() > 0:
+            final_out["logits"] = final_out["logits"].masked_fill(~active_mask, -1e9)
+            final_out["truth"] = final_out["truth"].masked_fill(~active_mask, 0.0)
+            final_out["knowledge"] = final_out["knowledge"].masked_fill(~active_mask, 0.0)
+            final_out["choice_pos"] = final_out["choice_pos"].masked_fill(~active_mask, 0.0)
+            final_out["choice_neg"] = final_out["choice_neg"].masked_fill(~active_mask, 0.0)
+            final_out["choice"] = torch.argmax(final_out["logits"], dim=-1)
+            final_out["active_mask"] = active_mask
 
         if return_diagnostics:
             # Probe earlier stages
             probe_0 = self.decision_head(x_0, candidate_states=cand_states)
             probe_1 = self.decision_head(x_1, candidate_states=cand_states)
+
+            if active_mask is not None and active_mask.numel() > 0:
+                probe_0["logits"] = probe_0["logits"].masked_fill(~active_mask, -1e9)
+                probe_0["truth"] = probe_0["truth"].masked_fill(~active_mask, 0.0)
+                probe_0["knowledge"] = probe_0["knowledge"].masked_fill(~active_mask, 0.0)
+
+                probe_1["logits"] = probe_1["logits"].masked_fill(~active_mask, -1e9)
+                probe_1["truth"] = probe_1["truth"].masked_fill(~active_mask, 0.0)
+                probe_1["knowledge"] = probe_1["knowledge"].masked_fill(~active_mask, 0.0)
 
             final_out["diagnostics"] = {
                 "stage_names": ["post_pooling", "post_context", "post_constraint"],

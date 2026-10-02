@@ -200,6 +200,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
             "constraints": constraints,
             "target_idx": new_target_idx,
             "task_scalar": task_scalar,
+            "num_active": num_active,
         }
 
 
@@ -217,6 +218,8 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         - `constraints`: List of constraint string lists of shape `[batch_size, max_choices]`.
         - `target_indices`: Torch tensor of shape `(batch_size,)` and dtype `torch.long`.
         - `task_scalars`: Torch tensor of shape `(batch_size, 1)` and dtype `torch.float32`.
+        - `num_active`: Torch tensor of shape `(batch_size,)` indicating active choice counts.
+        - `active_mask`: Torch boolean tensor of shape `(batch_size, max_choices)`.
     """
     queries = [item["query"] for item in batch]
     states = [item["state"] for item in batch]
@@ -226,10 +229,28 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         [item.get("task_scalar", -1.0) for item in batch], dtype=torch.float32
     ).unsqueeze(-1)
 
+    num_actives = [
+        item.get(
+            "num_active",
+            sum(1 for c in item["constraints"] if not str(c).startswith("none:")),
+        )
+        for item in batch
+    ]
+    num_active_tensor = torch.tensor(num_actives, dtype=torch.long)
+
+    max_choices = len(constraints[0]) if constraints else 0
+    if max_choices > 0:
+        choice_idx = torch.arange(max_choices, dtype=torch.long).unsqueeze(0).expand(len(batch), -1)
+        active_mask = choice_idx < num_active_tensor.unsqueeze(1)
+    else:
+        active_mask = torch.zeros((len(batch), 0), dtype=torch.bool)
+
     return {
         "queries": queries,
         "states": states,
         "constraints": constraints,
         "target_indices": target_indices,
         "task_scalars": task_scalars,
+        "num_active": num_active_tensor,
+        "active_mask": active_mask,
     }

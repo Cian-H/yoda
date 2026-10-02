@@ -76,13 +76,25 @@ class YodaLightningAdapter(pl.LightningModule):
         constraints: list[list[str]] = batch["constraints"]
         target_indices: torch.Tensor = batch["target_indices"]
         task_scalars: torch.Tensor | None = batch.get("task_scalars")
+        active_mask: torch.Tensor | None = batch.get("active_mask")
+        if active_mask is not None:
+            active_mask = active_mask.to(self.device)
 
-        out = self.model(
-            queries=queries,
-            states=states,
-            constraints=constraints,
-            task_scalars=task_scalars,
-        )
+        try:
+            out = self.model(
+                queries=queries,
+                states=states,
+                constraints=constraints,
+                task_scalars=task_scalars,
+                active_mask=active_mask,
+            )
+        except TypeError:
+            out = self.model(
+                queries=queries,
+                states=states,
+                constraints=constraints,
+                task_scalars=task_scalars,
+            )
         logits = out["logits"]
         batch_size = logits.size(0)
 
@@ -98,6 +110,7 @@ class YodaLightningAdapter(pl.LightningModule):
                 t_idx = target_indices[b_idx].item()
                 target_t[b_idx, t_idx] = 1.0
                 target_f[b_idx, t_idx] = 0.0
+
                 for c_idx, c_str in enumerate(constraints[b_idx]):
                     if c_idx != t_idx and c_str.startswith("none:"):
                         target_f[b_idx, c_idx] = 0.0
@@ -118,7 +131,7 @@ class YodaLightningAdapter(pl.LightningModule):
 
         # 3. Task-Conditioned Multiplicative LTN constraint loss
         if self.ltn_weight > 0.0:
-            ltn_loss = self.ltn_criterion(out, task_scalars)
+            ltn_loss = self.ltn_criterion(out, task_scalars, active_mask=active_mask)
             total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)
@@ -127,9 +140,7 @@ class YodaLightningAdapter(pl.LightningModule):
         preds = out["choice"] if "choice" in out else torch.argmax(logits, dim=-1)
         acc = (preds == target_indices).float().mean()
         knowledge = (
-            out["knowledge"].mean()
-            if "knowledge" in out
-            else torch.tensor(0.0, device=self.device)
+            out["knowledge"].mean() if "knowledge" in out else torch.tensor(0.0, device=self.device)
         )
 
         metrics = {

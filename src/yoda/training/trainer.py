@@ -77,9 +77,25 @@ class YodaTrainer:
         if task_scalars is not None:
             task_scalars = task_scalars.to(self.device)
 
-        out = self.model(
-            queries=queries, states=states, constraints=constraints, task_scalars=task_scalars
-        )
+        active_mask: torch.Tensor | None = batch.get("active_mask")
+        if active_mask is not None:
+            active_mask = active_mask.to(self.device)
+
+        try:
+            out = self.model(
+                queries=queries,
+                states=states,
+                constraints=constraints,
+                task_scalars=task_scalars,
+                active_mask=active_mask,
+            )
+        except TypeError:
+            out = self.model(
+                queries=queries,
+                states=states,
+                constraints=constraints,
+                task_scalars=task_scalars,
+            )
         logits = out["logits"]
         batch_size, num_choices = logits.shape
 
@@ -120,7 +136,7 @@ class YodaTrainer:
 
         # 3. LTN constraint loss (Multiplicative)
         if self.ltn_weight > 0.0:
-            ltn_loss = self.ltn_criterion(out, task_scalars)
+            ltn_loss = self.ltn_criterion(out, task_scalars, active_mask=active_mask)
             total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)

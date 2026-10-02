@@ -24,6 +24,7 @@ class DummyDecisionEngine(nn.Module):
         states: list[dict[str, Any]],
         constraints: list[list[str]],
         task_scalars: torch.Tensor | None = None,
+        active_mask: torch.Tensor | None = None,
         return_diagnostics: bool = False,
     ) -> dict[str, Any]:
         batch_size = len(queries)

@@ -150,6 +150,7 @@ def test_run_etl_caching_and_invalidation(mock_jsonl: Path, tmp_path: Path) -> N
 
     # 4. Input file modification: cache invalidated and re-executed
     import time
+
     time.sleep(0.01)
     mock_jsonl.touch()
     res4 = run_etl(input_path=mock_jsonl, output_path=out_parquet, max_choices=4)
