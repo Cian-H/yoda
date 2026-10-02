@@ -65,7 +65,10 @@ class TextEncoder(nn.Module):
             return self.dummy_embed(fake_ids)
 
         inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
-        if self.device is not None:
+        if self.model is not None:
+            target_device = next(self.model.parameters()).device
+            inputs = inputs.to(target_device)
+        elif self.device is not None:
             inputs = inputs.to(self.device)
 
         outputs = self.model(**inputs)
