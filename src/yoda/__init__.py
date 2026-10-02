@@ -19,6 +19,9 @@ from yoda.probabilistic.belnap import (
     FuzzyBelnapLoss,
 )
 from yoda.training import (
+    FocalLoss,
+    FocalMarginLoss,
+    MarginLoss,
     YodaDecisionDataset,
     YodaTrainer,
     collate_decision_batch,
@@ -34,7 +37,10 @@ __all__: list[str] = [
     "BelnapState",
     "BelnapTransformerBlock",
     "DecisionPayload",
+    "FocalLoss",
+    "FocalMarginLoss",
     "FuzzyBelnapLoss",
+    "MarginLoss",
     "MultiheadPooledAttention",
     "QueryContext",
     "SoftExp",

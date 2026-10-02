@@ -18,5 +18,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0009](./0009-decoupled-lightning-adapter.md) | Decoupled PyTorch Lightning Adapter and Frozen Backbone Architecture | Accepted | 2026-10-02 |
 | [0010](./0010-decoupled-columnar-parquet-dataset.md) | Decoupled Columnar Parquet ETL and Dataset Pipeline | Accepted | 2026-10-02 |
 | [0011](./0011-active-criteria-masking-and-candidate-affinity.md) | Active Criteria Masking and Dynamic Candidate Epistemic Affinity Scoring | Accepted | 2026-10-02 |
+| [0012](./0012-focal-margin-loss-and-onecycle-lr-scheduling.md) | Focal-Margin Loss Hybrid and OneCycleLR Annealing | Accepted | 2026-10-02 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)

@@ -376,6 +376,66 @@ class TestYodaTrainer:
             assert "eval_loss" in record
             assert "eval_accuracy" in record
             assert "eval_mean_knowledge" in record
+            assert "lr" in record
+            assert record["lr"] > 0.0
+
+    def test_trainer_onecycle_scheduling_steps(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies OneCycleLR modifies learning rate per batch step."""
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            lr=1e-3,
+            use_scheduler=True,
+            pct_start=0.3,
+            device="cpu",
+        )
+        history = trainer.fit(train_loader=synthetic_loader, epochs=4)
+        assert len(history) == 4
+        # Scheduler should be active and stepped
+        assert trainer.scheduler is not None
+        assert trainer.optimizer.param_groups[0]["lr"] != 1e-3
+
+
+class TestYodaLightningAdapterScheduler:
+    """Verifies scheduler configuration in YodaLightningAdapter."""
+
+    def test_configure_optimizers_with_total_steps(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        from yoda.training.lightning import YodaLightningAdapter
+
+        adapter = YodaLightningAdapter(
+            model=dummy_engine,
+            lr=1e-3,
+            use_scheduler=True,
+            total_steps=100,
+            pct_start=0.3,
+        )
+        opt_conf = adapter.configure_optimizers()
+        assert isinstance(opt_conf, dict)
+        assert "optimizer" in opt_conf
+        assert "lr_scheduler" in opt_conf
+        scheduler = opt_conf["lr_scheduler"]["scheduler"]
+        assert isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR)
+        assert opt_conf["lr_scheduler"]["interval"] == "step"
+
+    def test_configure_optimizers_without_scheduler(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        from yoda.training.lightning import YodaLightningAdapter
+
+        adapter = YodaLightningAdapter(
+            model=dummy_engine,
+            lr=1e-3,
+            use_scheduler=False,
+        )
+        opt_conf = adapter.configure_optimizers()
+        assert isinstance(opt_conf, torch.optim.Optimizer)
 
 
 def test_training_package_exports() -> None:
@@ -385,6 +445,12 @@ def test_training_package_exports() -> None:
     assert hasattr(training, "YodaDecisionDataset")
     assert hasattr(training, "collate_decision_batch")
     assert hasattr(training, "YodaTrainer")
+    assert hasattr(training, "FocalLoss")
+    assert hasattr(training, "MarginLoss")
+    assert hasattr(training, "FocalMarginLoss")
     assert "YodaDecisionDataset" in training.__all__
     assert "collate_decision_batch" in training.__all__
     assert "YodaTrainer" in training.__all__
+    assert "FocalLoss" in training.__all__
+    assert "MarginLoss" in training.__all__
+    assert "FocalMarginLoss" in training.__all__

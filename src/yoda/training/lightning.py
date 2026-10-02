@@ -5,12 +5,12 @@ from typing import Any
 
 import pytorch_lightning as pl
 import torch
-from torch import nn
 
 from yoda.architecture.belnap_transformer import BelnapState
 from yoda.architecture.engine import YodaDecisionEngine
 from yoda.nesy import LTNConstraintLoss
 from yoda.probabilistic.belnap import BelnapEvidence, FuzzyBelnapLoss
+from yoda.training.losses import FocalMarginLoss
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,12 @@ class YodaLightningAdapter(pl.LightningModule):
         weight_decay: float = 1e-4,
         belnap_weight: float = 0.1,
         ltn_weight: float = 0.1,
+        focal_gamma: float = 2.0,
+        margin: float = 0.2,
+        margin_weight: float = 0.1,
+        use_scheduler: bool = True,
+        pct_start: float = 0.3,
+        total_steps: int | None = None,
     ) -> None:
         """Initializes the Lightning adapter.
 
@@ -42,6 +48,12 @@ class YodaLightningAdapter(pl.LightningModule):
             weight_decay: Weight decay regularizer.
             belnap_weight: Multiplier for FuzzyBelnapLoss.
             ltn_weight: Multiplier for task-conditioned LTNConstraintLoss.
+            focal_gamma: Focusing exponent for FocalLoss.
+            margin: Target separation margin for MarginLoss.
+            margin_weight: Weight coefficient for MarginLoss term.
+            use_scheduler: Whether to configure OneCycleLR scheduler.
+            pct_start: Fraction of total steps for learning rate warmup.
+            total_steps: Total training steps for OneCycleLR; inferred if None.
         """
         super().__init__()
         self.model = model
@@ -49,8 +61,19 @@ class YodaLightningAdapter(pl.LightningModule):
         self.weight_decay = float(weight_decay)
         self.belnap_weight = float(belnap_weight)
         self.ltn_weight = float(ltn_weight)
+        self.focal_gamma = float(focal_gamma)
+        self.margin = float(margin)
+        self.margin_weight = float(margin_weight)
+        self.use_scheduler = bool(use_scheduler)
+        self.pct_start = float(pct_start)
+        self.total_steps = total_steps
 
-        self.ce_loss_fn = nn.CrossEntropyLoss()
+        self.focal_margin_loss_fn = FocalMarginLoss(
+            gamma=self.focal_gamma,
+            margin=self.margin,
+            margin_weight=self.margin_weight,
+            reduction="mean",
+        )
         self.belnap_loss_fn = FuzzyBelnapLoss(reduction="mean")
         self.ltn_criterion = LTNConstraintLoss()
 
@@ -62,6 +85,10 @@ class YodaLightningAdapter(pl.LightningModule):
                 "weight_decay": self.weight_decay,
                 "belnap_weight": self.belnap_weight,
                 "ltn_weight": self.ltn_weight,
+                "focal_gamma": self.focal_gamma,
+                "margin": self.margin,
+                "margin_weight": self.margin_weight,
+                "use_scheduler": self.use_scheduler,
             },
         )
 
@@ -98,8 +125,12 @@ class YodaLightningAdapter(pl.LightningModule):
         logits = out["logits"]
         batch_size = logits.size(0)
 
-        # 1. Primary Cross-Entropy loss
-        ce_loss = self.ce_loss_fn(logits, target_indices)
+        # 1. Base classification loss: Focal-Margin hybrid
+        base_cls_loss, loss_parts = self.focal_margin_loss_fn(
+            logits, target_indices, active_mask=active_mask
+        )
+        focal_loss = loss_parts["focal_loss"]
+        margin_loss = loss_parts["margin_loss"]
 
         # 2. Belnap fuzzy logic regularizer
         if self.belnap_weight > 0.0:
@@ -124,10 +155,10 @@ class YodaLightningAdapter(pl.LightningModule):
                 pred_evidence = BelnapEvidence(t=choice_state.e_pos, f=choice_state.e_neg)
 
             belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
-            base_loss = ce_loss + self.belnap_weight * belnap_loss
+            base_loss = base_cls_loss + self.belnap_weight * belnap_loss
         else:
             belnap_loss = torch.tensor(0.0, device=self.device)
-            base_loss = ce_loss
+            base_loss = base_cls_loss
 
         # 3. Task-Conditioned Multiplicative LTN constraint loss
         if self.ltn_weight > 0.0:
@@ -145,7 +176,9 @@ class YodaLightningAdapter(pl.LightningModule):
 
         metrics = {
             f"{stage}_loss": total_loss,
-            f"{stage}_ce_loss": ce_loss,
+            f"{stage}_ce_loss": focal_loss,  # Aliased to focal_loss for backward compat
+            f"{stage}_focal_loss": focal_loss,
+            f"{stage}_margin_loss": margin_loss,
             f"{stage}_belnap_loss": belnap_loss,
             f"{stage}_ltn_loss": ltn_loss,
             f"{stage}_acc": acc,
@@ -174,10 +207,38 @@ class YodaLightningAdapter(pl.LightningModule):
         loss, _ = self._shared_step(batch, stage="test")
         return loss
 
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Configures AdamW optimizer over model parameters."""
-        return torch.optim.AdamW(
+    def configure_optimizers(self) -> Any:
+        """Configures AdamW optimizer and optional OneCycleLR scheduler."""
+        optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
+        if not self.use_scheduler:
+            return optimizer
+
+        steps = self.total_steps
+        if steps is None and self._trainer is not None:
+            try:
+                est = self._trainer.estimated_stepping_batches
+                if est not in (None, float("inf")) and est > 0:
+                    steps = int(est)
+            except Exception:
+                pass
+
+        if steps is not None and steps > 0:
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.lr,
+                total_steps=steps,
+                pct_start=self.pct_start,
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "step",
+                },
+            }
+
+        return optimizer
