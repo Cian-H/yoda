@@ -254,6 +254,7 @@ class BelnapTransformerBlock(nn.Module):
         n_heads: int = 4,
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
+        residual_weight: float = 0.5,
     ) -> None:
         """Initializes BelnapTransformerBlock.
 
@@ -262,8 +263,10 @@ class BelnapTransformerBlock(nn.Module):
             n_heads: Number of attention heads.
             d_hidden: Hidden dimensionality of FFN.
             conflation_weight: Weight lambda for evidence conflation.
+            residual_weight: Interpolation weight alpha for convex combination residual join.
         """
         super().__init__()
+        self.residual_weight = residual_weight
         self.self_attn = BelnapAttention(d_model=d_model, n_heads=n_heads)
         self.cross_attn = BelnapAttention(d_model=d_model, n_heads=n_heads)
         self.ffn = BelnapFFN(
@@ -273,10 +276,18 @@ class BelnapTransformerBlock(nn.Module):
         )
 
     @staticmethod
-    def _residual_join(base: BelnapState, delta: BelnapState) -> BelnapState:
-        """Applies bounded residual join preserving [0, 1] evidence invariants."""
-        res_pos = torch.clamp(base.e_pos + delta.e_pos, min=0.0, max=1.0)
-        res_neg = torch.clamp(base.e_neg + delta.e_neg, min=0.0, max=1.0)
+    def _residual_join(
+        base: BelnapState,
+        delta: BelnapState,
+        alpha: float = 0.5,
+    ) -> BelnapState:
+        """Applies convex combination residual join preserving [0, 1] evidence invariants.
+
+        Formula: res = (1 - alpha) * base + alpha * delta
+        Guarantees strict boundedness in [0, 1] without saturation clipping or dead zones.
+        """
+        res_pos = (1.0 - alpha) * base.e_pos + alpha * delta.e_pos
+        res_neg = (1.0 - alpha) * base.e_neg + alpha * delta.e_neg
         return BelnapState(e_pos=res_pos, e_neg=res_neg)
 
     def forward(
@@ -287,16 +298,16 @@ class BelnapTransformerBlock(nn.Module):
         """Processes input state through self-attention, cross-attention, and FFN."""
         # Self-attention + residual join
         x_attn = self.self_attn(x, x)
-        x = self._residual_join(x, x_attn)
+        x = self._residual_join(x, x_attn, self.residual_weight)
 
         # Cross-attention (if context is supplied) + residual join
         if context is not None:
             x_cross = self.cross_attn(x, context)
-            x = self._residual_join(x, x_cross)
+            x = self._residual_join(x, x_cross, self.residual_weight)
 
         # Belnap FFN + residual join
         x_ffn = self.ffn(x)
-        return self._residual_join(x, x_ffn)
+        return self._residual_join(x, x_ffn, self.residual_weight)
 
 
 class BelnapDecisionTransformer(nn.Module):
@@ -310,6 +321,7 @@ class BelnapDecisionTransformer(nn.Module):
         num_choices: int = 5,
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
+        residual_weight: float = 0.5,
     ) -> None:
         """Initializes BelnapDecisionTransformer.
 
@@ -320,6 +332,7 @@ class BelnapDecisionTransformer(nn.Module):
             num_choices: Number of candidate decision choices.
             d_hidden: FFN hidden dimension.
             conflation_weight: Weight for bilattice evidence conflation.
+            residual_weight: Interpolation weight alpha for convex combination residual joins.
         """
         super().__init__()
         self.d_model = d_model
@@ -340,6 +353,7 @@ class BelnapDecisionTransformer(nn.Module):
                     n_heads=n_heads,
                     d_hidden=d_hidden,
                     conflation_weight=conflation_weight,
+                    residual_weight=residual_weight,
                 )
                 for _ in range(n_layers)
             ]

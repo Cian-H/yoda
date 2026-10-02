@@ -142,6 +142,7 @@ class YodaDecisionEngine(nn.Module):
         num_k_probes: int = 8,
         num_choices: int = 5,
         n_heads: int = 4,
+        residual_weight: float = 0.5,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -155,6 +156,7 @@ class YodaDecisionEngine(nn.Module):
             num_k_probes: Number of constraint epistemic probe tokens for Belnap MPA.
             num_choices: Number of decision choices.
             n_heads: Number of attention heads for Belnap attention and transformer blocks.
+            residual_weight: Interpolation weight alpha for convex combination residual joins.
             device: Target execution device.
             dtype: Target execution data type.
         """
@@ -166,6 +168,7 @@ class YodaDecisionEngine(nn.Module):
         self.num_k_probes = num_k_probes
         self.num_choices = num_choices
         self.n_heads = n_heads
+        self.residual_weight = residual_weight
 
         # Phase 1: Encoders
         self.text_encoder = TextEncoder(
@@ -204,10 +207,12 @@ class YodaDecisionEngine(nn.Module):
         self.context_reasoning = BelnapTransformerBlock(
             d_model=embed_dim,
             n_heads=n_heads,
+            residual_weight=residual_weight,
         )
         self.constraint_reasoning = BelnapTransformerBlock(
             d_model=embed_dim,
             n_heads=n_heads,
+            residual_weight=residual_weight,
         )
 
         # Phase 4: Judgment
