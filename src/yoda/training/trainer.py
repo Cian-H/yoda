@@ -33,7 +33,7 @@ class YodaTrainer:
         margin: float = 0.2,
         margin_weight: float = 0.1,
         use_scheduler: bool = True,
-        pct_start: float = 0.3,
+        pct_start: float = 0.05,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
         independent_eval: bool = False,
         device: str | torch.device = "cpu",

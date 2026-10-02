@@ -62,6 +62,12 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--pct-start",
+        type=float,
+        default=0.05,
+        help="Percentage of total training steps dedicated to warmup (default: 0.05 = 5%%)",
+    )
     parser.add_argument("--belnap-weight", type=float, default=0.1)
     parser.add_argument(
         "--ltn-weight",
@@ -273,6 +279,7 @@ def main() -> None:
         trainer = YodaTrainer(
             model=model,
             lr=args.lr,
+            pct_start=args.pct_start,
             belnap_weight=args.belnap_weight,
             ltn_weight=args.ltn_weight,
             independent_eval=args.independent_eval,
