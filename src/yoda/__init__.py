@@ -1,5 +1,6 @@
 """Top-level package for yoda."""
 
+from yoda.architecture.activations import SoftExp
 from yoda.architecture.attention import (
     BelnapMultiheadPooledAttention,
     MultiheadPooledAttention,
@@ -36,6 +37,7 @@ __all__: list[str] = [
     "FuzzyBelnapLoss",
     "MultiheadPooledAttention",
     "QueryContext",
+    "SoftExp",
     "YodaDecisionDataset",
     "YodaTrainer",
     "collate_decision_batch",

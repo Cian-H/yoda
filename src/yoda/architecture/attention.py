@@ -13,6 +13,7 @@ from typing import ClassVar
 import torch
 from torch import nn
 
+from yoda.architecture.activations import SoftExp
 from yoda.architecture.belnap_transformer import BelnapAttention, BelnapState
 
 logger = logging.getLogger(__name__)
@@ -146,7 +147,7 @@ class BelnapMultiheadPooledAttention(nn.Module):
         embed_dim: int,
         num_queries: int = 4,
         num_heads: int | None = None,
-        init_bias: float = -3.0,
+        init_bias: float = 0.0,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -156,7 +157,7 @@ class BelnapMultiheadPooledAttention(nn.Module):
             embed_dim: Dimensionality of token embeddings.
             num_queries: Number of epistemic query probe tokens.
             num_heads: Number of attention heads. Defaults to 4, 2, or 1 based on embed_dim.
-            init_bias: Initial negative bias for BelnapAttention output projections.
+            init_bias: Initial bias for BelnapAttention output projections. Defaults to 0.0.
             device: Target execution device.
             dtype: Target execution data type.
         """
@@ -180,6 +181,7 @@ class BelnapMultiheadPooledAttention(nn.Module):
 
         # Input adapter projection for raw continuous tensors
         self.input_proj = nn.Linear(embed_dim, 2 * embed_dim, device=device, dtype=dtype)
+        self.softexp = SoftExp(in_features=2 * embed_dim, device=device, dtype=dtype)
 
         # Belnap bipolar cross-attention
         self.belnap_attn = BelnapAttention(
@@ -230,7 +232,8 @@ class BelnapMultiheadPooledAttention(nn.Module):
             batch_size = x.e_pos.size(0)
         else:
             batch_size = x.size(0)
-            pos_raw, neg_raw = torch.sigmoid(self.input_proj(x)).chunk(2, dim=-1)
+            proj = self.softexp(self.input_proj(x))
+            pos_raw, neg_raw = torch.sigmoid(proj).chunk(2, dim=-1)
             kv_state = BelnapState(e_pos=pos_raw, e_neg=neg_raw)
 
         # Epistemic query state bounded strictly in [0, 1]
