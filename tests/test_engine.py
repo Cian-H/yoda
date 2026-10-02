@@ -156,6 +156,79 @@ class TestYodaDecisionEngine:
         assert dummy_engine.text_encoder.dummy_embed.weight.grad is not None
         assert not torch.isnan(dummy_engine.text_encoder.dummy_embed.weight.grad).any()
 
+    def test_engine_diagnostics_trajectory(self, dummy_engine: YodaDecisionEngine) -> None:
+        """Verifies intermediate diagnostic probes and attribution trajectories."""
+        queries = ["evaluate path", "check logic"]
+        states = [{"sensor": 10}, {"sensor": 20}]
+        constraints = [["sensor < 50"], ["sensor > 0"]]
+
+        # Default forward should not return diagnostics
+        default_out = dummy_engine(queries=queries, states=states, constraints=constraints)
+        assert "diagnostics" not in default_out
+
+        # Calling with return_diagnostics=True
+        out = dummy_engine(
+            queries=queries,
+            states=states,
+            constraints=constraints,
+            return_diagnostics=True,
+        )
+
+        assert "diagnostics" in out
+        diagnostics = out["diagnostics"]
+
+        assert diagnostics["stage_names"] == ["post_pooling", "post_context", "post_constraint"]
+
+        stage_logits = diagnostics["stage_logits"]
+        stage_knowledge = diagnostics["stage_knowledge"]
+        stage_truth = diagnostics["stage_truth"]
+        attributions = diagnostics["attributions"]
+
+        batch_size = len(queries)
+        num_choices = dummy_engine.num_choices
+        expected_shape = (3, batch_size, num_choices)
+
+        assert stage_logits.shape == expected_shape
+        assert stage_knowledge.shape == expected_shape
+        assert stage_truth.shape == expected_shape
+        assert attributions.shape == expected_shape
+
+        # Verify final stage matches output logits, truth, knowledge
+        assert torch.allclose(stage_logits[2], out["logits"])
+        assert torch.allclose(stage_knowledge[2], out["knowledge"])
+        assert torch.allclose(stage_truth[2], out["truth"])
+
+        # Verify attribution deltas
+        assert torch.allclose(attributions[0], stage_logits[0])
+        assert torch.allclose(attributions[1], stage_logits[1] - stage_logits[0])
+        assert torch.allclose(attributions[2], stage_logits[2] - stage_logits[1])
+        assert torch.allclose(attributions.sum(dim=0), out["logits"])
+
+        # Also test with candidate states active (num_k_probes == num_choices)
+        aligned_engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=64,
+            num_q_probes=4,
+            num_c_probes=4,
+            num_k_probes=5,
+            num_choices=5,
+            n_heads=4,
+        )
+        aligned_out = aligned_engine(
+            queries=queries,
+            states=states,
+            constraints=constraints,
+            return_diagnostics=True,
+        )
+        assert "diagnostics" in aligned_out
+        aligned_diag = aligned_out["diagnostics"]
+        assert aligned_diag["stage_logits"].shape == (3, 2, 5)
+        assert torch.allclose(
+            aligned_diag["attributions"][1],
+            aligned_diag["stage_logits"][1] - aligned_diag["stage_logits"][0],
+        )
+        assert torch.allclose(aligned_diag["attributions"].sum(dim=0), aligned_out["logits"])
+
 
 def test_architecture_package_exports() -> None:
     """Verifies that YodaDecisionEngine and BelnapDecisionHead are exported from architecture."""
