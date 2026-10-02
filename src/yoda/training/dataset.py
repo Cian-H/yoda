@@ -155,6 +155,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
                         "state": state if isinstance(state, dict) else {},
                         "active_choices": active_choices,
                         "target_idx": matched_idx,
+                        "question_type": metadata.get("question_type", "null"),
                     }
                 )
 
@@ -179,6 +180,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         sample = self._samples[idx]
         active = sample["active_choices"]
         target_idx = sample["target_idx"]
+        question_type = sample.get("question_type", "null")
         num_active = len(active)
 
         if self.shuffle_choices and num_active > 1:
@@ -191,11 +193,15 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
 
         constraints = shuffled_active + ["none: Unused option"] * (self.max_choices - num_active)
 
+        task_scalar_map = {"null": -1.0, "score": 0.0, "choice": 1.0}
+        task_scalar = task_scalar_map.get(question_type, -1.0)
+
         return {
             "query": sample["query"],
             "state": sample["state"],
             "constraints": constraints,
             "target_idx": new_target_idx,
+            "task_scalar": task_scalar,
         }
 
 
@@ -212,15 +218,21 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         - `states`: List of symbolic state dictionaries of length `batch_size`.
         - `constraints`: List of constraint string lists of shape `[batch_size, max_choices]`.
         - `target_indices`: Torch tensor of shape `(batch_size,)` and dtype `torch.long`.
+        - `task_scalars`: Torch tensor of shape `(batch_size, 1)` and dtype `torch.float32`.
     """
     queries = [item["query"] for item in batch]
     states = [item["state"] for item in batch]
     constraints = [item["constraints"] for item in batch]
     target_indices = torch.tensor([item["target_idx"] for item in batch], dtype=torch.long)
+    task_scalars = torch.tensor(
+        [item.get("task_scalar", -1.0) for item in batch], dtype=torch.float32
+    ).unsqueeze(-1)
 
     return {
         "queries": queries,
         "states": states,
         "constraints": constraints,
         "target_indices": target_indices,
+        "task_scalars": task_scalars,
     }
+
