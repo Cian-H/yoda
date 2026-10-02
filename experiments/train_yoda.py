@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import logging
-from pathlib import Path
 import time
+from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
@@ -22,9 +22,20 @@ logger = logging.getLogger("experiments.train_yoda")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train YodaDecisionEngine on unified System 1 datasets.")
-    parser.add_argument("--text-model-name", type=str, default="sentence-transformers/all-MiniLM-L6-v2")
-    parser.add_argument("--freeze-backbone", action="store_true", default=True, help="Freeze pretrained text encoder backbone weights")
+    parser = argparse.ArgumentParser(
+        description="Train YodaDecisionEngine on unified System 1 datasets."
+    )
+    parser.add_argument(
+        "--text-model-name",
+        type=str,
+        default="sentence-transformers/all-MiniLM-L6-v2",
+    )
+    parser.add_argument(
+        "--freeze-backbone",
+        action="store_true",
+        default=True,
+        help="Freeze pretrained text encoder backbone weights",
+    )
     parser.add_argument("--unfreeze-backbone", dest="freeze_backbone", action="store_false")
     parser.add_argument("--train-path", type=str, default="data/processed/aggregated_train.jsonl")
     parser.add_argument("--eval-path", type=str, default="data/processed/aggregated_eval.jsonl")
@@ -37,6 +48,13 @@ def main() -> None:
     parser.add_argument("--belnap-weight", type=float, default=0.1)
     parser.add_argument("--embed-dim", type=int, default=128)
     parser.add_argument("--num-choices", type=int, default=5)
+    parser.add_argument(
+        "--shuffle-choices",
+        action="store_true",
+        default=True,
+        help="Randomly permute active candidate choices during training",
+    )
+    parser.add_argument("--no-shuffle-choices", dest="shuffle_choices", action="store_false")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -44,14 +62,16 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
         device = torch.device("cuda:0")
-        logger.info("Using GPU: %s (VRAM: %.2f GB)", torch.cuda.get_device_name(0), torch.cuda.get_device_properties(0).total_memory / 1e9)
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        logger.info("Using GPU: %s (VRAM: %.2f GB)", torch.cuda.get_device_name(0), vram_gb)
     else:
         device = torch.device("cpu")
         logger.info("CUDA not available; executing on CPU")
 
     logger.info(
-        "Loading aggregated training dataset (source=None, max_samples=%d)...",
+        "Loading aggregated training dataset (max_samples=%d, shuffle_choices=%s)...",
         args.max_train_samples,
+        args.shuffle_choices,
     )
     t0 = time.time()
     train_dataset = YodaDecisionDataset(
@@ -60,6 +80,7 @@ def main() -> None:
         question_type=None,
         max_samples=args.max_train_samples,
         max_choices=args.num_choices,
+        shuffle_choices=args.shuffle_choices,
     )
     logger.info("Loaded %d training samples in %.2fs", len(train_dataset), time.time() - t0)
 
@@ -106,22 +127,31 @@ def main() -> None:
     )
     model = model.to(device)
 
-    # If freeze_backbone is True, unfreeze only the last layer of the text encoder for fine adaptation
-    if hasattr(model.text_encoder, "model") and model.text_encoder.model is not None:
-        if args.freeze_backbone:
-            for param in model.text_encoder.model.parameters():
-                param.requires_grad = False
-            # Unfreeze the last transformer layer of MiniLM for semantic domain adaptation
-            if hasattr(model.text_encoder.model, "encoder") and hasattr(model.text_encoder.model.encoder, "layer"):
-                for param in model.text_encoder.model.encoder.layer[-1].parameters():
-                    param.requires_grad = True
-                logger.info("Froze text backbone except the top transformer layer for domain adaptation")
-            else:
-                logger.info("Froze pretrained transformer backbone weights")
+    # If freeze_backbone is True, unfreeze only the last layer of the text encoder
+    if (
+        hasattr(model.text_encoder, "model")
+        and model.text_encoder.model is not None
+        and args.freeze_backbone
+    ):
+        for param in model.text_encoder.model.parameters():
+            param.requires_grad = False
+        # Unfreeze the last transformer layer of MiniLM for semantic domain adaptation
+        if hasattr(model.text_encoder.model, "encoder") and hasattr(
+            model.text_encoder.model.encoder, "layer"
+        ):
+            for param in model.text_encoder.model.encoder.layer[-1].parameters():
+                param.requires_grad = True
+            logger.info("Froze text backbone except top layer for domain adaptation")
+        else:
+            logger.info("Froze pretrained transformer backbone weights")
 
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
-    logger.info("Model created: %s trainable / %s total parameters", f"{trainable_params:,}", f"{total_params:,}")
+    logger.info(
+        "Model created: %s trainable / %s total parameters",
+        f"{trainable_params:,}",
+        f"{total_params:,}",
+    )
 
     trainer = YodaTrainer(
         model=model,
@@ -140,7 +170,11 @@ def main() -> None:
     total_time = time.time() - start_time
 
     print("\n" + "=" * 90)
-    print(f"{'Epoch':<6} | {'Train Loss':<11} | {'Train CE':<10} | {'Train Belnap':<13} | {'Train Acc':<10} | {'Eval Loss':<10} | {'Eval Acc':<10} | {'Knowledge':<9}")
+    header = (
+        f"{'Epoch':<6} | {'Train Loss':<11} | {'Train CE':<10} | {'Train Belnap':<13} | "
+        f"{'Train Acc':<10} | {'Eval Loss':<10} | {'Eval Acc':<10} | {'Knowledge':<9}"
+    )
+    print(header)
     print("-" * 90)
     for h in history:
         print(
@@ -154,7 +188,8 @@ def main() -> None:
             f"{h.get('eval_mean_knowledge', 0.0):<9.4f}"
         )
     print("=" * 90)
-    logger.info("Training complete in %.2fs (%.2fs per epoch)", total_time, total_time / args.epochs)
+    sec_per_epoch = total_time / args.epochs if args.epochs > 0 else 0.0
+    logger.info("Training complete in %.2fs (%.2fs per epoch)", total_time, sec_per_epoch)
 
     # Save model weights
     out_path = Path(args.output_model)

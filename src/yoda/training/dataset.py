@@ -28,6 +28,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         question_type: str | None = "choice",
         max_samples: int | None = None,
         max_choices: int = 5,
+        shuffle_choices: bool = False,
     ) -> None:
         """Initializes YodaDecisionDataset by parsing records from a JSONL file.
 
@@ -37,6 +38,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
             question_type: Task question type filter (e.g. "choice"), or None to disable.
             max_samples: Maximum number of matched samples to load.
             max_choices: Standardized number of choice constraints per sample.
+            shuffle_choices: Whether to randomly permute active candidate choices in __getitem__.
         """
         super().__init__()
         self.file_path = Path(file_path)
@@ -44,6 +46,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         self.question_type = question_type
         self.max_samples = max_samples
         self.max_choices = max_choices
+        self.shuffle_choices = shuffle_choices
         self._samples: list[dict[str, Any]] = []
 
         self._load_data()
@@ -130,10 +133,8 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
                     # Unmatched target or target choice falls beyond max_choices
                     continue
 
-                # Standardize constraints: pad or truncate to max_choices
-                constraints: list[str] = [str(c) for c in raw_constraints[: self.max_choices]]
-                while len(constraints) < self.max_choices:
-                    constraints.append("none: Unused option")
+                # Truncate raw constraints to max_choices
+                active_choices: list[str] = [str(c) for c in raw_constraints[: self.max_choices]]
 
                 # Extract symbolic state
                 context = record.get("context")
@@ -152,7 +153,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
                     {
                         "query": query,
                         "state": state if isinstance(state, dict) else {},
-                        "constraints": constraints,
+                        "active_choices": active_choices,
                         "target_idx": matched_idx,
                     }
                 )
@@ -174,8 +175,28 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         return len(self._samples)
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        """Retrieves a standardized sample by index."""
-        return self._samples[idx]
+        """Retrieves a standardized sample by index, optionally shuffling choices."""
+        sample = self._samples[idx]
+        active = sample["active_choices"]
+        target_idx = sample["target_idx"]
+        num_active = len(active)
+
+        if self.shuffle_choices and num_active > 1:
+            perm = torch.randperm(num_active).tolist()
+            shuffled_active = [active[p] for p in perm]
+            new_target_idx = perm.index(target_idx)
+        else:
+            shuffled_active = list(active)
+            new_target_idx = target_idx
+
+        constraints = shuffled_active + ["none: Unused option"] * (self.max_choices - num_active)
+
+        return {
+            "query": sample["query"],
+            "state": sample["state"],
+            "constraints": constraints,
+            "target_idx": new_target_idx,
+        }
 
 
 def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:

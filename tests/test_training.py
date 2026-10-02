@@ -175,6 +175,40 @@ class TestYodaDecisionDataset:
         )
         assert len(dataset) == 2
 
+    def test_dataset_choice_shuffling(self, mock_jsonl_file: Path) -> None:
+        """Verifies shuffle_choices permutes active choices while preserving target mapping."""
+        dataset_unshuffled = YodaDecisionDataset(
+            file_path=mock_jsonl_file,
+            source="n4ze3m_synth",
+            question_type="choice",
+            shuffle_choices=False,
+        )
+        dataset_shuffled = YodaDecisionDataset(
+            file_path=mock_jsonl_file,
+            source="n4ze3m_synth",
+            question_type="choice",
+            shuffle_choices=True,
+        )
+
+        # In unshuffled, sample 0 target is always at idx 1
+        assert dataset_unshuffled[0]["target_idx"] == 1
+        assert dataset_unshuffled[0]["constraints"][1] == "A2: Second option"
+
+        # In shuffled, test multiple reads
+        observed_indices = set()
+        for _ in range(30):
+            sample = dataset_shuffled[0]
+            # Target choice string must always be the correct option!
+            assert sample["constraints"][sample["target_idx"]] == "A2: Second option"
+            # Padding must stay at the end
+            assert sample["constraints"][3] == "none: Unused option"
+            assert sample["constraints"][4] == "none: Unused option"
+            observed_indices.add(sample["target_idx"])
+
+        # Across 30 iterations, target should appear at multiple active positions (0, 1, 2)
+        assert len(observed_indices) > 1
+        assert observed_indices.issubset({0, 1, 2})
+
     def test_dataset_with_real_data(self) -> None:
         """Verifies dataset loading against data/processed/aggregated_eval.jsonl if present."""
         data_path = Path("data/processed/aggregated_eval.jsonl")
