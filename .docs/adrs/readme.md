@@ -14,5 +14,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0005](./0005-belnap-multihead-pooled-attention.md) | Belnap Multihead Pooled Attention (Belnap-MPA) | Accepted | 2026-10-01 |
 | [0006](./0006-softexp-and-mish-activation-architecture.md) | SoftExp and Mish Activation Upgrades for Gradient Flow and Evidence Modeling | Accepted | 2026-10-02 |
 | [0007](./0007-convex-combination-residual-joins.md) | Convex Combination Residual Joins for Epistemic Bilattices | Accepted | 2026-10-02 |
+| [0008](./0008-modular-submodule-realignment.md) | Modular Submodule Realignment (NeSy, Data, and XAI) | Accepted | 2026-10-02 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)

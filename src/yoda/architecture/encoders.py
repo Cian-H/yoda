@@ -1,7 +1,5 @@
 """Phase 1 input encoders for text, symbolic states, and constraints."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import torch

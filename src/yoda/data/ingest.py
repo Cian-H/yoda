@@ -5,8 +5,6 @@ Dwidlee Lite Phase 2, Dwidlee Lite General, N4ze3m Synth, and Mghafiri Scenarios
 into canonical DecisionPayload instances, enforcing strict licensing and schema criteria.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import shutil

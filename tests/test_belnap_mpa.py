@@ -1,7 +1,5 @@
 """Unit and property tests for BelnapMultiheadPooledAttention."""
 
-from __future__ import annotations
-
 import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -69,9 +67,7 @@ def test_belnap_mpa_zero_knowledge_suppression() -> None:
     assert torch.allclose(pooled_state.truth, torch.tensor(0.5), atol=0.05)
 
     # Default init_bias=0.0 preserves neutral gradient-rich knowledge around 0.5
-    default_mpa = BelnapMultiheadPooledAttention(
-        embed_dim=embed_dim, num_queries=num_queries
-    )
+    default_mpa = BelnapMultiheadPooledAttention(embed_dim=embed_dim, num_queries=num_queries)
     _, default_pooled = default_mpa(zero_state)
     assert default_pooled.knowledge.max().item() > 0.4
 

@@ -4,8 +4,6 @@ Profiles single-query and batched heuristic evaluation latency, constraint
 satisfaction, and throughput against the System 1 sub-10ms latency SLA.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

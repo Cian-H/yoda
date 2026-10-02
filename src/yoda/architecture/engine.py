@@ -4,8 +4,6 @@ Wires together Phase 1 (Encoders), Phase 2 (Belnap MPA Pooling), Phase 3 (Reason
 and Phase 4 (Decision Head) using the Cascaded Cross-Attention (Sequential Interrogation) flow.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

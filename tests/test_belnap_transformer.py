@@ -1,7 +1,5 @@
 """Unit and property-based test suite for Belnap Bilattice Native Transformer."""
 
-from __future__ import annotations
-
 import pytest
 import torch
 

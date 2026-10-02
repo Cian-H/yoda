@@ -1,38 +1,42 @@
 import torch
 
-from yoda.probabilistic.ltn import LTNConstraintLoss
+from yoda.nesy import LTNConstraintLoss
 
 
 def test_ltn_constraint_loss_forward():
     # Mock outputs
     outputs = {
-        "choice_pos": torch.tensor([
-            [0.9, 0.1, 0.2],
-            [0.8, 0.8, 0.1],
-            [0.0, 0.0, 0.0],
-            [1.0, 1.0, 1.0],
-        ], requires_grad=True),
-        "choice_neg": torch.tensor([
-            [0.1, 0.9, 0.8],
-            [0.2, 0.2, 0.9],
-            [1.0, 1.0, 1.0],
-            [1.0, 1.0, 1.0],
-        ], requires_grad=True),
-        "truth": torch.tensor([
-            [0.9, 0.1, 0.2],  # one dominant
-            [0.5, 0.5, 0.5],  # overlapping
-            [0.1, 0.2, 0.1],  # no dominant
-            [0.9, 0.8, 0.7],  # overlapping highly
-        ], requires_grad=True)
+        "choice_pos": torch.tensor(
+            [
+                [0.9, 0.1, 0.2],
+                [0.8, 0.8, 0.1],
+                [0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0],
+            ],
+            requires_grad=True,
+        ),
+        "choice_neg": torch.tensor(
+            [
+                [0.1, 0.9, 0.8],
+                [0.2, 0.2, 0.9],
+                [1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+            ],
+            requires_grad=True,
+        ),
+        "truth": torch.tensor(
+            [
+                [0.9, 0.1, 0.2],  # one dominant
+                [0.5, 0.5, 0.5],  # overlapping
+                [0.1, 0.2, 0.1],  # no dominant
+                [0.9, 0.8, 0.7],  # overlapping highly
+            ],
+            requires_grad=True,
+        ),
     }
 
     # 0, 1 = score/null -> no ME. 2, 3 = choice -> ME
-    task_scalars = torch.tensor([
-        [-1.0],
-        [0.0],
-        [1.0],
-        [1.0]
-    ])
+    task_scalars = torch.tensor([[-1.0], [0.0], [1.0], [1.0]])
 
     criterion = LTNConstraintLoss()
     loss = criterion(outputs, task_scalars)
@@ -52,6 +56,7 @@ def test_ltn_constraint_loss_forward():
     # Sum: 3.75, num_elements: 12 -> 3.75 / 12 = 0.3125
 
     assert loss > 0.0
+
 
 def test_ltn_constraint_loss_without_task_scalars():
     criterion = LTNConstraintLoss()

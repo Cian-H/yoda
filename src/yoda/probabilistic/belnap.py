@@ -11,8 +11,6 @@ Canonical Truth States (t, f):
 - Neither (Unknown):  (0.0, 0.0) - Underdetermined / complete ignorance
 """
 
-from __future__ import annotations
-
 import logging
 from typing import NamedTuple
 

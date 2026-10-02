@@ -1,6 +1,6 @@
 """Training pipeline, datasets, and optimization loops for yoda."""
 
-from yoda.training.dataset import (
+from yoda.data.dataset import (
     YodaDecisionDataset,
     collate_decision_batch,
 )

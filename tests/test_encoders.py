@@ -1,7 +1,5 @@
 """Tests for Phase 1 encoders (TextEncoder, SymbolicStateEncoder, ConstraintEncoder)."""
 
-from __future__ import annotations
-
 from typing import Any
 from unittest.mock import MagicMock, patch
 

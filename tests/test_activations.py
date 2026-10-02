@@ -1,7 +1,5 @@
 """Unit tests for SoftExp and custom activation functions."""
 
-from __future__ import annotations
-
 import torch
 
 from yoda.architecture.activations import SoftExp

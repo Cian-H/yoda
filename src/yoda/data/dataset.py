@@ -1,7 +1,5 @@
 """Dataset loaders and batch collation routines for Yoda training pipelines."""
 
-from __future__ import annotations
-
 import json
 import logging
 from pathlib import Path
@@ -235,4 +233,3 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "target_indices": target_indices,
         "task_scalars": task_scalars,
     }
-
