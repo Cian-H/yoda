@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from yoda.architecture.engine import YodaDecisionEngine
-from yoda.data import YodaDecisionDataset, collate_decision_batch
+from yoda.data import YodaDecisionDataset, YodaParquetDataset, collate_decision_batch
 from yoda.training import YodaLightningAdapter, YodaTrainer
 from yoda.xai import run_dla_evaluation
 
@@ -74,6 +74,13 @@ def main() -> None:
         default=False,
         help="Train using PyTorch Lightning adapter wrapper",
     )
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers")
+    parser.add_argument(
+        "--pin-memory",
+        action="store_true",
+        default=False,
+        help="Enable pinned memory for faster host-to-device transfers",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -87,29 +94,53 @@ def main() -> None:
         device = torch.device("cpu")
         logger.info("CUDA not available; executing on CPU")
 
+    def _create_dataset(
+        path_str: str,
+        max_samples: int | None,
+        max_choices: int,
+        shuffle_choices: bool,
+    ) -> YodaDecisionDataset | YodaParquetDataset:
+        p = Path(path_str)
+        if p.suffix.lower() == ".parquet":
+            return YodaParquetDataset(
+                file_path=p,
+                max_samples=max_samples,
+                shuffle_choices=shuffle_choices,
+            )
+        return YodaDecisionDataset(
+            file_path=p,
+            source=None,
+            question_type=None,
+            max_samples=max_samples,
+            max_choices=max_choices,
+            shuffle_choices=shuffle_choices,
+        )
+
     logger.info(
-        "Loading aggregated training dataset (max_samples=%d, shuffle_choices=%s)...",
+        "Loading training dataset from %s (max_samples=%d, shuffle_choices=%s)...",
+        args.train_path,
         args.max_train_samples,
         args.shuffle_choices,
     )
     t0 = time.time()
-    train_dataset = YodaDecisionDataset(
-        file_path=args.train_path,
-        source=None,
-        question_type=None,
+    train_dataset = _create_dataset(
+        path_str=args.train_path,
         max_samples=args.max_train_samples,
         max_choices=args.num_choices,
         shuffle_choices=args.shuffle_choices,
     )
     logger.info("Loaded %d training samples in %.2fs", len(train_dataset), time.time() - t0)
 
-    logger.info("Loading evaluation dataset (max_samples=%d)...", args.max_eval_samples)
-    eval_dataset = YodaDecisionDataset(
-        file_path=args.eval_path,
-        source=None,
-        question_type=None,
+    logger.info(
+        "Loading evaluation dataset from %s (max_samples=%d)...",
+        args.eval_path,
+        args.max_eval_samples,
+    )
+    eval_dataset = _create_dataset(
+        path_str=args.eval_path,
         max_samples=args.max_eval_samples,
         max_choices=args.num_choices,
+        shuffle_choices=False,
     )
     logger.info("Loaded %d evaluation samples", len(eval_dataset))
 
@@ -118,14 +149,16 @@ def main() -> None:
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=collate_decision_batch,
-        num_workers=0,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
     )
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_decision_batch,
-        num_workers=0,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
     )
 
     logger.info(
