@@ -44,8 +44,18 @@ def main() -> None:
         default=False,
         help="Unfreeze top layer of text encoder for domain adaptation (default: False)",
     )
-    parser.add_argument("--train-path", type=str, default="data/processed/aggregated_train.jsonl")
-    parser.add_argument("--eval-path", type=str, default="data/processed/aggregated_eval.jsonl")
+    default_train = (
+        "data/processed/train.parquet"
+        if Path("data/processed/train.parquet").exists()
+        else "data/processed/aggregated_train.jsonl"
+    )
+    default_eval = (
+        "data/processed/eval.parquet"
+        if Path("data/processed/eval.parquet").exists()
+        else "data/processed/aggregated_eval.jsonl"
+    )
+    parser.add_argument("--train-path", type=str, default=default_train)
+    parser.add_argument("--eval-path", type=str, default=default_eval)
     parser.add_argument("--output-model", type=str, default="models/yoda_system1_v1.pt")
     parser.add_argument("--max-train-samples", type=int, default=20000)
     parser.add_argument("--max-eval-samples", type=int, default=1000)
@@ -59,7 +69,24 @@ def main() -> None:
         default=0.1,
         help="Weight multiplier for task-conditioned LTN constraint loss",
     )
-    parser.add_argument("--embed-dim", type=int, default=128)
+    parser.add_argument(
+        "--embed-dim",
+        type=int,
+        default=None,
+        help="Latent embedding dimension (default: None, adopts text backbone native dim)",
+    )
+    parser.add_argument(
+        "--independent-eval",
+        action="store_true",
+        default=True,
+        help="Evaluate candidate options independently with grouped losses (default: True)",
+    )
+    parser.add_argument(
+        "--legacy-eval",
+        dest="independent_eval",
+        action="store_false",
+        help="Evaluate candidates using legacy joint multi-choice mode",
+    )
     parser.add_argument("--num-choices", type=int, default=5)
     parser.add_argument(
         "--shuffle-choices",
@@ -173,9 +200,9 @@ def main() -> None:
     )
 
     logger.info(
-        "Instantiating YodaDecisionEngine (backbone=%s, embed_dim=%d, num_choices=%d)...",
+        "Instantiating YodaDecisionEngine (backbone=%s, embed_dim=%s, num_choices=%d)...",
         args.text_model_name,
-        args.embed_dim,
+        str(args.embed_dim),
         args.num_choices,
     )
     model = YodaDecisionEngine(
@@ -248,6 +275,7 @@ def main() -> None:
             lr=args.lr,
             belnap_weight=args.belnap_weight,
             ltn_weight=args.ltn_weight,
+            independent_eval=args.independent_eval,
             device=device,
         )
 
