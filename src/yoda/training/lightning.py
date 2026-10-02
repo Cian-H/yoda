@@ -39,8 +39,9 @@ class YodaLightningAdapter(pl.LightningModule):
         use_scheduler: bool = True,
         pct_start: float = 0.3,
         total_steps: int | None = None,
+        independent_eval: bool = False,
     ) -> None:
-        """Initializes the Lightning adapter.
+        """Initializes YodaLightningAdapter.
 
         Args:
             model: Pure PyTorch YodaDecisionEngine instance.
@@ -54,6 +55,7 @@ class YodaLightningAdapter(pl.LightningModule):
             use_scheduler: Whether to configure OneCycleLR scheduler.
             pct_start: Fraction of total steps for learning rate warmup.
             total_steps: Total training steps for OneCycleLR; inferred if None.
+            independent_eval: Whether to use independent choice assessment with grouped losses.
         """
         super().__init__()
         self.model = model
@@ -67,6 +69,7 @@ class YodaLightningAdapter(pl.LightningModule):
         self.use_scheduler = bool(use_scheduler)
         self.pct_start = float(pct_start)
         self.total_steps = total_steps
+        self.independent_eval = bool(independent_eval)
 
         self.focal_margin_loss_fn = FocalMarginLoss(
             gamma=self.focal_gamma,
@@ -89,15 +92,97 @@ class YodaLightningAdapter(pl.LightningModule):
                 "margin": self.margin,
                 "margin_weight": self.margin_weight,
                 "use_scheduler": self.use_scheduler,
+                "independent_eval": self.independent_eval,
             },
         )
 
-    def _shared_step(
+    def _shared_independent_step(
         self,
         batch: dict[str, Any],
         stage: str,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Computes joint forward pass and multi-objective loss for train/val/test."""
+        """Computes loss and metrics for independent candidate evaluations."""
+        c_queries: list[str] = batch["candidate_queries"]
+        c_states: list[dict[str, Any]] = batch["candidate_states"]
+        candidates: list[str] = batch["candidates"]
+        group_ids: torch.Tensor = batch["candidate_group_ids"].to(self.device)
+        labels: torch.Tensor = batch["candidate_labels"].to(self.device)
+        task_scalars: torch.Tensor | None = batch.get("candidate_task_scalars")
+        if task_scalars is not None:
+            task_scalars = task_scalars.to(self.device)
+
+        out = self.model(
+            queries=c_queries,
+            states=c_states,
+            candidates=candidates,
+            task_scalars=task_scalars,
+        )
+        logits = out["logits"]
+
+        base_cls_loss, loss_parts = self.focal_margin_loss_fn(
+            logits, labels, group_ids=group_ids
+        )
+        focal_loss = loss_parts["focal_loss"]
+        margin_loss = loss_parts["margin_loss"]
+
+        if self.belnap_weight > 0.0:
+            target_evidence = BelnapEvidence(t=labels, f=1.0 - labels)
+            pred_evidence = BelnapEvidence(t=out["choice_pos"], f=out["choice_neg"])
+            belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
+            base_loss = base_cls_loss + self.belnap_weight * belnap_loss
+        else:
+            belnap_loss = torch.tensor(0.0, device=self.device)
+            base_loss = base_cls_loss
+
+        if self.ltn_weight > 0.0:
+            ltn_loss = self.ltn_criterion(out, task_scalars=task_scalars, group_ids=group_ids)
+            total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
+        else:
+            ltn_loss = torch.tensor(0.0, device=self.device)
+            total_loss = base_loss
+
+        unique_groups = torch.unique(group_ids)
+        correct_count = 0
+        for gid in unique_groups:
+            mask = group_ids == gid
+            pred_idx = torch.argmax(logits[mask])
+            gt_idx = torch.argmax(labels[mask])
+            if pred_idx == gt_idx:
+                correct_count += 1
+
+        num_groups = len(unique_groups)
+        acc = torch.tensor(correct_count / max(1, num_groups), device=self.device)
+        knowledge = (
+            out["knowledge"].mean() if "knowledge" in out else torch.tensor(0.0, device=self.device)
+        )
+
+        metrics = {
+            f"{stage}_loss": total_loss,
+            f"{stage}_ce_loss": focal_loss,
+            f"{stage}_focal_loss": focal_loss,
+            f"{stage}_margin_loss": margin_loss,
+            f"{stage}_belnap_loss": belnap_loss,
+            f"{stage}_ltn_loss": ltn_loss,
+            f"{stage}_acc": acc,
+            f"{stage}_knowledge": knowledge,
+        }
+
+        if self._trainer is not None:
+            self.log_dict(
+                metrics,
+                prog_bar=(stage != "test"),
+                batch_size=num_groups,
+                on_step=(stage == "train"),
+                on_epoch=True,
+            )
+        return total_loss, metrics
+
+    def _shared_legacy_step(
+        self,
+        batch: dict[str, Any],
+        stage: str,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Computes loss and metrics for legacy fixed-dimension batches."""
         queries: list[str] = batch["queries"]
         states: list[dict[str, Any]] = batch["states"]
         constraints: list[list[str]] = batch["constraints"]
@@ -125,14 +210,12 @@ class YodaLightningAdapter(pl.LightningModule):
         logits = out["logits"]
         batch_size = logits.size(0)
 
-        # 1. Base classification loss: Focal-Margin hybrid
         base_cls_loss, loss_parts = self.focal_margin_loss_fn(
             logits, target_indices, active_mask=active_mask
         )
         focal_loss = loss_parts["focal_loss"]
         margin_loss = loss_parts["margin_loss"]
 
-        # 2. Belnap fuzzy logic regularizer
         if self.belnap_weight > 0.0:
             target_t = torch.zeros_like(logits)
             target_f = torch.ones_like(logits)
@@ -160,7 +243,6 @@ class YodaLightningAdapter(pl.LightningModule):
             belnap_loss = torch.tensor(0.0, device=self.device)
             base_loss = base_cls_loss
 
-        # 3. Task-Conditioned Multiplicative LTN constraint loss
         if self.ltn_weight > 0.0:
             ltn_loss = self.ltn_criterion(out, task_scalars, active_mask=active_mask)
             total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
@@ -176,7 +258,7 @@ class YodaLightningAdapter(pl.LightningModule):
 
         metrics = {
             f"{stage}_loss": total_loss,
-            f"{stage}_ce_loss": focal_loss,  # Aliased to focal_loss for backward compat
+            f"{stage}_ce_loss": focal_loss,
             f"{stage}_focal_loss": focal_loss,
             f"{stage}_margin_loss": margin_loss,
             f"{stage}_belnap_loss": belnap_loss,
@@ -194,6 +276,17 @@ class YodaLightningAdapter(pl.LightningModule):
                 on_epoch=True,
             )
         return total_loss, metrics
+
+    def _shared_step(
+        self,
+        batch: dict[str, Any],
+        stage: str,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Computes joint forward pass and multi-objective loss for train/val/test."""
+        if self.independent_eval and "candidates" in batch and "candidate_queries" in batch:
+            return self._shared_independent_step(batch, stage)
+        return self._shared_legacy_step(batch, stage)
+
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
         loss, _ = self._shared_step(batch, stage="train")
