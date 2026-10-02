@@ -35,7 +35,7 @@ def main() -> None:
         "--freeze-backbone",
         action="store_true",
         default=True,
-        help="Freeze pretrained text encoder backbone weights (default: True, 100% frozen)",
+        help="Freeze pretrained text encoder backbone weights (default: True, 100%% frozen)",
     )
     parser.add_argument("--unfreeze-backbone", dest="freeze_backbone", action="store_false")
     parser.add_argument(
