@@ -31,6 +31,7 @@ class DirectLogitAttribution:
     ) -> dict[str, Any]:
         """Computes stage-wise marginal logit attribution, accuracy, and knowledge calibration."""
         target_device = torch.device(device) if isinstance(device, str) else device
+        model = model.to(target_device)
         model.eval()
         logger.info(
             "xai.dla.evaluation_started",
