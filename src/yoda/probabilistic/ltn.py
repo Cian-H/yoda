@@ -25,25 +25,31 @@ class LTNConstraintLoss(nn.Module):
         choice_pos = outputs["choice_pos"]
         choice_neg = outputs["choice_neg"]
 
-        # Non-Contradiction Loss: shouldn't strongly believe both positive and negative evidence.
-        # T(e+, e-) = e+ * e-
-        nc_loss = (choice_pos * choice_neg).mean()
+        # 1. Universal Complementarity Loss (Bivalence)
+        # Prevents apathy (both 0) and contradiction (both 1).
+        # -log( e+*(1 - e-) + e-*(1 - e+) )
+        prob_comp = choice_pos * (1.0 - choice_neg) + choice_neg * (1.0 - choice_pos)
+        nc_loss = -torch.log(prob_comp + 1e-7).mean()
 
         me_loss = torch.tensor(0.0, device=choice_pos.device, dtype=choice_pos.dtype)
         if task_scalars is not None:
             truth = outputs["truth"]
-            # Mutual Exclusivity & Existential Constraint:
-            # 1. Truths shouldn't heavily overlap: sum_{i!=j} t_i * t_j
-            # 2. At least one choice MUST be true: sum(t_i) should be close to 1.0
-            sum_t = truth.sum(dim=-1)
-            sum_t_sq = (truth ** 2).sum(dim=-1)
+            # 2. Exactly-One (XOR) Semantic Loss for Choice tasks
+            # P(XOR) = sum_i [ t_i * prod_{j != i} (1 - t_j) ]
+            N = truth.size(1)
+            p_not = 1.0 - truth
+            p_xor = torch.zeros_like(truth[:, 0])
             
-            overlap_penalty = sum_t ** 2 - sum_t_sq
-            existence_penalty = (sum_t - 1.0) ** 2
-            
-            me_loss_per_batch = overlap_penalty + existence_penalty
+            for i in range(N):
+                term = truth[:, i].clone()
+                for j in range(N):
+                    if i != j:
+                        term = term * p_not[:, j]
+                p_xor = p_xor + term
+
+            xor_loss_per_batch = -torch.log(p_xor + 1e-7)
 
             task_mask = (task_scalars > 0.5).float().squeeze(-1)
-            me_loss = (me_loss_per_batch * task_mask).mean()
+            me_loss = (xor_loss_per_batch * task_mask).mean()
 
         return nc_loss + me_loss
