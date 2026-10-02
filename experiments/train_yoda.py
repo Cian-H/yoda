@@ -4,13 +4,15 @@ import argparse
 import logging
 import time
 from pathlib import Path
+from typing import Any
 
+import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
 
 from yoda.architecture.engine import YodaDecisionEngine
 from yoda.data import YodaDecisionDataset, collate_decision_batch
-from yoda.training.trainer import YodaTrainer
+from yoda.training import YodaLightningAdapter, YodaTrainer
 from yoda.xai import run_dla_evaluation
 
 logging.basicConfig(
@@ -33,9 +35,15 @@ def main() -> None:
         "--freeze-backbone",
         action="store_true",
         default=True,
-        help="Freeze pretrained text encoder backbone weights",
+        help="Freeze pretrained text encoder backbone weights (default: True, 100% frozen)",
     )
     parser.add_argument("--unfreeze-backbone", dest="freeze_backbone", action="store_false")
+    parser.add_argument(
+        "--unfreeze-top-layer",
+        action="store_true",
+        default=False,
+        help="Unfreeze top layer of text encoder for domain adaptation (default: False)",
+    )
     parser.add_argument("--train-path", type=str, default="data/processed/aggregated_train.jsonl")
     parser.add_argument("--eval-path", type=str, default="data/processed/aggregated_eval.jsonl")
     parser.add_argument("--output-model", type=str, default="models/yoda_system1_v1.pt")
@@ -45,6 +53,12 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--belnap-weight", type=float, default=0.1)
+    parser.add_argument(
+        "--ltn-weight",
+        type=float,
+        default=0.1,
+        help="Weight multiplier for task-conditioned LTN constraint loss",
+    )
     parser.add_argument("--embed-dim", type=int, default=128)
     parser.add_argument("--num-choices", type=int, default=5)
     parser.add_argument(
@@ -54,6 +68,12 @@ def main() -> None:
         help="Randomly permute active candidate choices during training",
     )
     parser.add_argument("--no-shuffle-choices", dest="shuffle_choices", action="store_false")
+    parser.add_argument(
+        "--use-lightning",
+        action="store_true",
+        default=False,
+        help="Train using PyTorch Lightning adapter wrapper",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -126,23 +146,27 @@ def main() -> None:
     )
     model = model.to(device)
 
-    # If freeze_backbone is True, unfreeze only the last layer of the text encoder
-    if (
-        hasattr(model.text_encoder, "model")
-        and model.text_encoder.model is not None
-        and args.freeze_backbone
-    ):
-        for param in model.text_encoder.model.parameters():
-            param.requires_grad = False
-        # Unfreeze the last transformer layer of MiniLM for semantic domain adaptation
-        if hasattr(model.text_encoder.model, "encoder") and hasattr(
-            model.text_encoder.model.encoder, "layer"
-        ):
-            for param in model.text_encoder.model.encoder.layer[-1].parameters():
-                param.requires_grad = True
-            logger.info("Froze text backbone except top layer for domain adaptation")
+    # Text encoder backbone freezing
+    if hasattr(model.text_encoder, "model") and model.text_encoder.model is not None:
+        if args.freeze_backbone:
+            for param in model.text_encoder.model.parameters():
+                param.requires_grad = False
+
+            if args.unfreeze_top_layer and hasattr(model.text_encoder.model, "encoder") and hasattr(
+                model.text_encoder.model.encoder, "layer"
+            ):
+                for param in model.text_encoder.model.encoder.layer[-1].parameters():
+                    param.requires_grad = True
+                logger.info("Froze text backbone except top layer for domain adaptation")
+            else:
+                encoder = getattr(model.text_encoder.model, "encoder", None)
+                num_layers = len(getattr(encoder, "layer", []))
+                logger.info(
+                    "Froze text backbone 100%% (%d transformer layers fully frozen)",
+                    num_layers,
+                )
         else:
-            logger.info("Froze pretrained transformer backbone weights")
+            logger.info("Text encoder backbone left 100%% trainable")
 
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
@@ -152,41 +176,63 @@ def main() -> None:
         f"{total_params:,}",
     )
 
-    trainer = YodaTrainer(
-        model=model,
-        lr=args.lr,
-        belnap_weight=args.belnap_weight,
-        device=device,
-    )
-
-    logger.info("Starting %d-epoch training run...", args.epochs)
-    start_time = time.time()
-    history = trainer.fit(
-        train_loader=train_loader,
-        eval_loader=eval_loader,
-        epochs=args.epochs,
-    )
-    total_time = time.time() - start_time
-
-    print("\n" + "=" * 90)
-    header = (
-        f"{'Epoch':<6} | {'Train Loss':<11} | {'Train CE':<10} | {'Train Belnap':<13} | "
-        f"{'Train Acc':<10} | {'Eval Loss':<10} | {'Eval Acc':<10} | {'Knowledge':<9}"
-    )
-    print(header)
-    print("-" * 90)
-    for h in history:
-        print(
-            f"{int(h['epoch']):<6} | "
-            f"{h['train_loss']:<11.4f} | "
-            f"{h['train_ce_loss']:<10.4f} | "
-            f"{h['train_belnap_loss']:<13.4f} | "
-            f"{h['train_accuracy'] * 100:<9.1f}% | "
-            f"{h.get('eval_loss', 0.0):<10.4f} | "
-            f"{h.get('eval_accuracy', 0.0) * 100:<9.1f}% | "
-            f"{h.get('eval_mean_knowledge', 0.0):<9.4f}"
+    if args.use_lightning:
+        logger.info("Starting PyTorch Lightning training run (%d epochs)...", args.epochs)
+        adapter = YodaLightningAdapter(
+            model=model,
+            lr=args.lr,
+            belnap_weight=args.belnap_weight,
+            ltn_weight=args.ltn_weight,
         )
-    print("=" * 90)
+        accelerator = "gpu" if device.type == "cuda" else "cpu"
+        pl_trainer = pl.Trainer(
+            max_epochs=args.epochs,
+            accelerator=accelerator,
+            devices=1,
+            enable_progress_bar=True,
+            log_every_n_steps=10,
+        )
+        start_time = time.time()
+        pl_trainer.fit(model=adapter, train_dataloaders=train_loader, val_dataloaders=eval_loader)
+        total_time = time.time() - start_time
+        history: list[dict[str, Any]] = []
+    else:
+        trainer = YodaTrainer(
+            model=model,
+            lr=args.lr,
+            belnap_weight=args.belnap_weight,
+            ltn_weight=args.ltn_weight,
+            device=device,
+        )
+
+        logger.info("Starting %d-epoch training run with native YodaTrainer...", args.epochs)
+        start_time = time.time()
+        history = trainer.fit(
+            train_loader=train_loader,
+            eval_loader=eval_loader,
+            epochs=args.epochs,
+        )
+        total_time = time.time() - start_time
+
+        print("\n" + "=" * 90)
+        header = (
+            f"{'Epoch':<6} | {'Train Loss':<11} | {'Train CE':<10} | {'Train Belnap':<13} | "
+            f"{'Train Acc':<10} | {'Eval Loss':<10} | {'Eval Acc':<10} | {'Knowledge':<9}"
+        )
+        print(header)
+        print("-" * 90)
+        for h in history:
+            print(
+                f"{int(h['epoch']):<6} | "
+                f"{h['train_loss']:<11.4f} | "
+                f"{h['train_ce_loss']:<10.4f} | "
+                f"{h['train_belnap_loss']:<13.4f} | "
+                f"{h['train_accuracy'] * 100:<9.1f}% | "
+                f"{h.get('eval_loss', 0.0):<10.4f} | "
+                f"{h.get('eval_accuracy', 0.0) * 100:<9.1f}% | "
+                f"{h.get('eval_mean_knowledge', 0.0):<9.4f}"
+            )
+        print("=" * 90)
     sec_per_epoch = total_time / args.epochs if args.epochs > 0 else 0.0
     logger.info("Training complete in %.2fs (%.2fs per epoch)", total_time, sec_per_epoch)
 
