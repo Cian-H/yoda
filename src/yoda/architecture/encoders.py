@@ -140,7 +140,11 @@ class ConstraintEncoder(nn.Module):
         cand_pooled = cand_seq.mean(dim=1)
         return cand_pooled.view(batch_size, max_candidates, -1)
 
-    def forward(self, constraints_batch: list[list[str]]) -> torch.Tensor:
-        """Encodes batches of constraints by joining them with a separator."""
-        formatted = [self._format_constraints(c) for c in constraints_batch]
+    def forward(self, constraints_batch: list[str] | list[list[str]]) -> torch.Tensor:
+        """Encodes batches of constraints or flat candidate strings."""
+        if not constraints_batch:
+            return self.text_encoder([])
+        if isinstance(constraints_batch[0], str):
+            return self.text_encoder(constraints_batch)  # type: ignore[arg-type]
+        formatted = [self._format_constraints(c) for c in constraints_batch]  # type: ignore[arg-type]
         return self.text_encoder(formatted)

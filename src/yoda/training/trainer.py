@@ -35,6 +35,7 @@ class YodaTrainer:
         use_scheduler: bool = True,
         pct_start: float = 0.3,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+        independent_eval: bool = False,
         device: str | torch.device = "cpu",
     ) -> None:
         """Initializes YodaTrainer.
@@ -51,6 +52,7 @@ class YodaTrainer:
             use_scheduler: Whether to automatically instantiate OneCycleLR during fit().
             pct_start: Percentage of training cycle spent warming up learning rate.
             scheduler: Optional pre-configured PyTorch learning rate scheduler.
+            independent_eval: Whether to use independent choice assessment with grouped losses.
             device: Target execution device.
         """
         self.device = torch.device(device) if isinstance(device, str) else device
@@ -64,6 +66,7 @@ class YodaTrainer:
         self.use_scheduler = bool(use_scheduler)
         self.pct_start = float(pct_start)
         self.scheduler = scheduler
+        self.independent_eval = bool(independent_eval)
 
         self.optimizer = (
             optimizer
@@ -89,20 +92,93 @@ class YodaTrainer:
                 "margin": self.margin,
                 "margin_weight": self.margin_weight,
                 "use_scheduler": self.use_scheduler,
+                "independent_eval": self.independent_eval,
                 "lr": self.lr,
             },
         )
 
-    def _compute_loss_and_metrics(
+    def _compute_independent_loss_and_metrics(
         self,
         batch: dict[str, Any],
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        """Computes joint Focal-Margin loss, Belnap loss, LTN loss, and batch accuracy metrics."""
+        """Computes loss and metrics for independent candidate evaluations."""
+        c_queries: list[str] = batch["candidate_queries"]
+        c_states: list[dict[str, Any]] = batch["candidate_states"]
+        candidates: list[str] = batch["candidates"]
+        group_ids: torch.Tensor = batch["candidate_group_ids"].to(self.device)
+        labels: torch.Tensor = batch["candidate_labels"].to(self.device)
+        task_scalars: torch.Tensor | None = batch.get("candidate_task_scalars")
+        if task_scalars is not None:
+            task_scalars = task_scalars.to(self.device)
+
+        out = self.model(
+            queries=c_queries,
+            states=c_states,
+            candidates=candidates,
+            task_scalars=task_scalars,
+        )
+        logits = out["logits"]
+
+        # Base classification loss: Grouped Focal-Margin hybrid
+        base_cls_loss, loss_parts = self.focal_margin_loss_fn(
+            logits, labels, group_ids=group_ids
+        )
+        focal_loss = loss_parts["focal_loss"]
+        margin_loss = loss_parts["margin_loss"]
+
+        # Belnap semantic regularization
+        if self.belnap_weight > 0.0:
+            target_evidence = BelnapEvidence(t=labels, f=1.0 - labels)
+            pred_evidence = BelnapEvidence(t=out["choice_pos"], f=out["choice_neg"])
+            belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
+            base_loss = base_cls_loss + self.belnap_weight * belnap_loss
+        else:
+            belnap_loss = torch.tensor(0.0, device=self.device)
+            base_loss = base_cls_loss
+
+        # Grouped LTN constraint loss
+        if self.ltn_weight > 0.0:
+            ltn_loss = self.ltn_criterion(out, task_scalars=task_scalars, group_ids=group_ids)
+            total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
+        else:
+            ltn_loss = torch.tensor(0.0, device=self.device)
+            total_loss = base_loss
+
+        unique_groups = torch.unique(group_ids)
+        correct_count = 0
+        for gid in unique_groups:
+            mask = group_ids == gid
+            pred_idx = torch.argmax(logits[mask])
+            gt_idx = torch.argmax(labels[mask])
+            if pred_idx == gt_idx:
+                correct_count += 1
+
+        num_groups = len(unique_groups)
+        knowledge_mean = out["knowledge"].mean().item() if "knowledge" in out else 0.0
+
+        metrics = {
+            "loss": total_loss.item(),
+            "ce_loss": focal_loss.item(),
+            "focal_loss": focal_loss.item(),
+            "margin_loss": margin_loss.item(),
+            "belnap_loss": belnap_loss.item(),
+            "ltn_loss": ltn_loss.item(),
+            "correct": float(correct_count),
+            "total": float(num_groups),
+            "knowledge_sum": float(knowledge_mean * num_groups),
+        }
+        return total_loss, metrics
+
+    def _compute_legacy_loss_and_metrics(
+        self,
+        batch: dict[str, Any],
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Computes loss and metrics for legacy fixed-dimension batches."""
         queries: list[str] = batch["queries"]
         states: list[dict[str, Any]] = batch["states"]
         constraints: list[list[str]] = batch["constraints"]
         target_indices: torch.Tensor = batch["target_indices"].to(self.device)
-        task_scalars: torch.Tensor | None = batch.get("task_scalars")
+        task_scalars = batch.get("task_scalars")
         if task_scalars is not None:
             task_scalars = task_scalars.to(self.device)
 
@@ -128,14 +204,12 @@ class YodaTrainer:
         logits = out["logits"]
         batch_size, num_choices = logits.shape
 
-        # 1. Base classification loss: Focal-Margin hybrid
         base_cls_loss, loss_parts = self.focal_margin_loss_fn(
             logits, target_indices, active_mask=active_mask
         )
         focal_loss = loss_parts["focal_loss"]
         margin_loss = loss_parts["margin_loss"]
 
-        # 2. Belnap semantic regularization
         if self.belnap_weight > 0.0:
             target_t = torch.zeros(
                 (batch_size, num_choices), device=self.device, dtype=torch.float32
@@ -147,7 +221,6 @@ class YodaTrainer:
             target_t.scatter_(1, target_indices.unsqueeze(1), 1.0)
             target_f.scatter_(1, target_indices.unsqueeze(1), 0.0)
 
-            # Mark padded options as ignorance (t=0.0, f=0.0)
             for b_idx in range(batch_size):
                 for c_idx, c_str in enumerate(constraints[b_idx]):
                     if c_idx != target_indices[b_idx].item() and c_str.startswith("none:"):
@@ -167,7 +240,6 @@ class YodaTrainer:
             belnap_loss = torch.tensor(0.0, device=self.device)
             base_loss = base_cls_loss
 
-        # 3. LTN constraint loss (Multiplicative gating against reward hacking)
         if self.ltn_weight > 0.0:
             ltn_loss = self.ltn_criterion(out, task_scalars, active_mask=active_mask)
             total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
@@ -181,7 +253,7 @@ class YodaTrainer:
 
         metrics = {
             "loss": total_loss.item(),
-            "ce_loss": focal_loss.item(),  # Aliased to focal_loss for backward compat
+            "ce_loss": focal_loss.item(),
             "focal_loss": focal_loss.item(),
             "margin_loss": margin_loss.item(),
             "belnap_loss": belnap_loss.item(),
@@ -191,6 +263,16 @@ class YodaTrainer:
             "knowledge_sum": float(knowledge_mean * batch_size),
         }
         return total_loss, metrics
+
+    def _compute_loss_and_metrics(
+        self,
+        batch: dict[str, Any],
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Computes joint Focal-Margin loss, Belnap loss, LTN loss, and batch accuracy metrics."""
+        if self.independent_eval and "candidates" in batch and "candidate_queries" in batch:
+            return self._compute_independent_loss_and_metrics(batch)
+        return self._compute_legacy_loss_and_metrics(batch)
+
 
     def train_epoch(self, dataloader: DataLoader[dict[str, Any]]) -> dict[str, float]:
         """Runs one full training epoch over the dataloader.

@@ -1,7 +1,7 @@
 # ADR 0011: Active Criteria Masking and Dynamic Candidate Epistemic Affinity Scoring
 
 ## Status
-Accepted
+Superseded by [ADR-0013](./0013-independent-choice-assessment-architecture.md)
 
 ## Date
 2026-10-02

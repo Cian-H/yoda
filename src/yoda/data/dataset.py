@@ -245,6 +245,32 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
     else:
         active_mask = torch.zeros((len(batch), 0), dtype=torch.bool)
 
+    cand_queries: list[str] = []
+    cand_states: list[dict[str, Any]] = []
+    candidates: list[str] = []
+    cand_labels: list[float] = []
+    cand_group_ids: list[int] = []
+    cand_task_scalars: list[float] = []
+
+    for b_idx, item in enumerate(batch):
+        q = item["query"]
+        s = item["state"]
+        raw_c = item["constraints"]
+        t_idx = item.get("target_idx", -1)
+        n_act = item.get(
+            "num_active",
+            sum(1 for c in raw_c if not str(c).startswith("none:")),
+        )
+        task_sc = float(item.get("task_scalar", -1.0))
+        active_c = raw_c[:n_act]
+        for c_idx, c_str in enumerate(active_c):
+            cand_queries.append(q)
+            cand_states.append(s)
+            candidates.append(str(c_str))
+            cand_labels.append(1.0 if c_idx == t_idx else 0.0)
+            cand_group_ids.append(b_idx)
+            cand_task_scalars.append(task_sc)
+
     return {
         "queries": queries,
         "states": states,
@@ -253,4 +279,12 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "task_scalars": task_scalars,
         "num_active": num_active_tensor,
         "active_mask": active_mask,
+        "candidates": candidates,
+        "candidate_queries": cand_queries,
+        "candidate_states": cand_states,
+        "candidate_labels": torch.tensor(cand_labels, dtype=torch.float32),
+        "candidate_group_ids": torch.tensor(cand_group_ids, dtype=torch.long),
+        "candidate_task_scalars": (
+            torch.tensor(cand_task_scalars, dtype=torch.float32).unsqueeze(-1)
+        ),
     }
