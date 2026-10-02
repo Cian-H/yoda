@@ -7,8 +7,6 @@ information (Neither) and contradictory evidence (Both) without softmax attentio
 or false compromise vector collapses.
 """
 
-from __future__ import annotations
-
 import logging
 import math
 from dataclasses import dataclass

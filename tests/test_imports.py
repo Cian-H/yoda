@@ -1,7 +1,5 @@
 """Tests for verifying package imports across all submodules in yoda."""
 
-from __future__ import annotations
-
 import importlib
 
 import pytest

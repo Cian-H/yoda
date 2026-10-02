@@ -1,7 +1,5 @@
 """Training engine and optimization loops for Yoda System 1 decision models."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -11,8 +9,8 @@ from torch.utils.data import DataLoader
 
 from yoda.architecture.belnap_transformer import BelnapState
 from yoda.architecture.engine import YodaDecisionEngine
+from yoda.nesy import LTNConstraintLoss
 from yoda.probabilistic.belnap import BelnapEvidence, FuzzyBelnapLoss
-from yoda.probabilistic.ltn import LTNConstraintLoss
 
 logger = logging.getLogger(__name__)
 

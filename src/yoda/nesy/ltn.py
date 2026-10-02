@@ -39,7 +39,7 @@ class LTNConstraintLoss(nn.Module):
             N = truth.size(1)
             p_not = 1.0 - truth
             p_xor = torch.zeros_like(truth[:, 0])
-            
+
             for i in range(N):
                 term = truth[:, i].clone()
                 for j in range(N):

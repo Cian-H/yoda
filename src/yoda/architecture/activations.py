@@ -1,7 +1,5 @@
 """Custom neural-symbolic activation functions."""
 
-from __future__ import annotations
-
 import logging
 
 import torch

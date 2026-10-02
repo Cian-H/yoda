@@ -1,7 +1,5 @@
 """Tests for Belnap bilattice continuous logic and uncertainty decomposition."""
 
-from __future__ import annotations
-
 import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st

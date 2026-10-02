@@ -4,8 +4,6 @@ Aggregates variable length input token sequences into fixed-dimensional latent
 representations via multihead cross-attention with learnable query tokens.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from typing import ClassVar

@@ -1,7 +1,5 @@
 """Tests for DatasetIngestionPipeline and schema transformation."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from yoda.architecture.schema import DecisionPayload

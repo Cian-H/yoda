@@ -1,19 +1,17 @@
 """Executable experiment script for multi-dataset training of YodaDecisionEngine."""
 
-from __future__ import annotations
-
 import argparse
 import logging
 import time
 from pathlib import Path
-from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
 
 from yoda.architecture.engine import YodaDecisionEngine
-from yoda.training.dataset import YodaDecisionDataset, collate_decision_batch
+from yoda.data import YodaDecisionDataset, collate_decision_batch
 from yoda.training.trainer import YodaTrainer
+from yoda.xai import run_dla_evaluation
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,9 +181,9 @@ def main() -> None:
             f"{h['train_loss']:<11.4f} | "
             f"{h['train_ce_loss']:<10.4f} | "
             f"{h['train_belnap_loss']:<13.4f} | "
-            f"{h['train_accuracy']*100:<9.1f}% | "
+            f"{h['train_accuracy'] * 100:<9.1f}% | "
             f"{h.get('eval_loss', 0.0):<10.4f} | "
-            f"{h.get('eval_accuracy', 0.0)*100:<9.1f}% | "
+            f"{h.get('eval_accuracy', 0.0) * 100:<9.1f}% | "
             f"{h.get('eval_mean_knowledge', 0.0):<9.4f}"
         )
     print("=" * 90)
@@ -212,95 +210,6 @@ def main() -> None:
         out_path,
     )
     logger.info("Checkpoint saved to: %s", str(out_path))
-
-
-def run_dla_evaluation(
-    model: YodaDecisionEngine,
-    eval_loader: DataLoader[dict[str, Any]],
-    device: torch.device,
-) -> dict[str, Any]:
-    """Runs Direct Logit Attribution (DLA) diagnostic sweep across the evaluation set."""
-    model.eval()
-    logger.info("Computing Direct Logit Attribution (DLA) diagnostics across eval set...")
-
-    stage_names = [
-        "Stage 0 (Post-Pooling)",
-        "Stage 1 (Post-Context)",
-        "Stage 2 (Post-Constraint)",
-    ]
-    num_stages = len(stage_names)
-    stage_correct = [0.0] * num_stages
-    stage_target_logits = [0.0] * num_stages
-    stage_knowledge = [0.0] * num_stages
-    stage_target_attributions = [0.0] * num_stages
-    total_samples = 0
-
-    with torch.no_grad():
-        for batch in eval_loader:
-            targets = batch["target_indices"].to(device)
-            out = model(
-                queries=batch["queries"],
-                states=batch["states"],
-                constraints=batch["constraints"],
-                return_diagnostics=True,
-            )
-            diag = out["diagnostics"]
-            s_logits = diag["stage_logits"]  # [num_stages, batch_size, num_choices]
-            s_know = diag["stage_knowledge"]
-            s_attr = diag["attributions"]
-
-            b_size = targets.size(0)
-            total_samples += b_size
-
-            for s in range(num_stages):
-                preds = s_logits[s].argmax(dim=-1)
-                stage_correct[s] += (preds == targets).sum().item()
-
-                t_logits = s_logits[s].gather(1, targets.unsqueeze(1)).squeeze(1)
-                stage_target_logits[s] += t_logits.sum().item()
-
-                t_know = s_know[s].gather(1, targets.unsqueeze(1)).squeeze(1)
-                stage_knowledge[s] += t_know.sum().item()
-
-                t_attr = s_attr[s].gather(1, targets.unsqueeze(1)).squeeze(1)
-                stage_target_attributions[s] += t_attr.sum().item()
-
-    if total_samples == 0:
-        return {}
-
-    stage_accuracies = [c / total_samples for c in stage_correct]
-    avg_target_logits = [val / total_samples for val in stage_target_logits]
-    avg_knowledge = [k / total_samples for k in stage_knowledge]
-    avg_attributions = [a / total_samples for a in stage_target_attributions]
-
-    print("\n" + "=" * 95)
-    print("DIRECT LOGIT ATTRIBUTION (DLA) DIAGNOSTIC REPORT (EVAL SET)")
-    print("=" * 95)
-    header = (
-        f"{'Reasoning Stage':<28} | {'Accuracy':<10} | {'Mean Target Logit':<18} | "
-        f"{'Marginal Attribution':<22} | {'Mean Target k':<12}"
-    )
-    print(header)
-    print("-" * 95)
-    for s in range(num_stages):
-        attr_str = (
-            f"{avg_attributions[s]:+.4f}" if s > 0 else f"{avg_attributions[s]:.4f} (Base)"
-        )
-        print(
-            f"{stage_names[s]:<28} | "
-            f"{stage_accuracies[s]*100:<9.1f}% | "
-            f"{avg_target_logits[s]:<18.4f} | "
-            f"{attr_str:<22} | "
-            f"{avg_knowledge[s]:<12.4f}"
-        )
-    print("=" * 95 + "\n")
-
-    return {
-        "stage_accuracies": stage_accuracies,
-        "avg_target_logits": avg_target_logits,
-        "avg_knowledge": avg_knowledge,
-        "avg_attributions": avg_attributions,
-    }
 
 
 if __name__ == "__main__":

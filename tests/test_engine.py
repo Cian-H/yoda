@@ -1,7 +1,5 @@
 """Tests for top-level YodaDecisionEngine and BelnapDecisionHead."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

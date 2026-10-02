@@ -1,7 +1,5 @@
 """Tests for decision payload schema and architecture models."""
 
-from __future__ import annotations
-
 from yoda.architecture.schema import DecisionPayload, QueryContext
 
 
