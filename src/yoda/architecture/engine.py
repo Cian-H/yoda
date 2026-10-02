@@ -94,10 +94,10 @@ class BelnapDecisionHead(nn.Module):
             # Pairwise candidate alignment scoring
             q_p = self.cand_query_pos(pooled_pos).unsqueeze(1)  # [B, 1, D]
             q_n = self.cand_query_neg(pooled_neg).unsqueeze(1)  # [B, 1, D]
-            c_p = self.cand_opt_pos(candidate_states.e_pos)     # [B, num_choices, D]
-            c_n = self.cand_opt_neg(candidate_states.e_neg)     # [B, num_choices, D]
+            c_p = self.cand_opt_pos(candidate_states.e_pos)  # [B, num_choices, D]
+            c_n = self.cand_opt_neg(candidate_states.e_neg)  # [B, num_choices, D]
 
-            scale = (self.d_model ** 0.5)
+            scale = self.d_model**0.5
             pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale
             neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale
 
@@ -233,13 +233,16 @@ class YodaDecisionEngine(nn.Module):
         queries: list[str],
         states: list[dict[str, Any]],
         constraints: list[list[str]],
-    ) -> dict[str, torch.Tensor]:
+        return_diagnostics: bool = False,
+    ) -> dict[str, Any]:
         """Executes sequential epistemic reasoning over queries, states, and constraints.
 
         Args:
             queries: Batch of query text strings.
             states: Batch of symbolic state dictionaries.
             constraints: Batch of constraint string lists.
+            return_diagnostics: If True, attaches intermediate stage trajectory and
+                attribution probes into the returned dictionary under `"diagnostics"`.
 
         Returns:
             Dictionary containing:
@@ -248,6 +251,7 @@ class YodaDecisionEngine(nn.Module):
             - `knowledge`: Choice knowledge coordinates in [0, 1] of shape
                 `(batch_size, num_choices)`.
             - `choice`: Selected choice indices of shape `(batch_size,)`.
+            - `diagnostics`: (Optional) Intermediate DLA stage trajectories and attributions.
         """
         # 1. Encoding
         q_emb = self.text_encoder(queries)
@@ -259,10 +263,45 @@ class YodaDecisionEngine(nn.Module):
         _, c_state = self.c_mpa(c_emb)
         _, k_state = self.k_mpa(k_emb)
 
-        # 3. Reasoning (Sequential Interrogation)
-        reasoning = self.context_reasoning(x=q_state, context=c_state)
-        reasoning = self.constraint_reasoning(x=reasoning, context=k_state)
-
-        # 4. Judgment (Pairwise candidate alignment if constraint probes match num_choices)
+        # 3. Reasoning (Sequential Interrogation) & Diagnostics Interception
         cand_states = k_state if k_state.e_pos.size(1) == self.num_choices else None
-        return self.decision_head(reasoning, candidate_states=cand_states)
+
+        # Stage 0: Post-Pooling
+        x_0 = q_state
+
+        # Stage 1: Post-Context
+        x_1 = self.context_reasoning(x=x_0, context=c_state)
+
+        # Stage 2: Post-Constraint (Final)
+        x_2 = self.constraint_reasoning(x=x_1, context=k_state)
+
+        # 4. Final Judgment
+        final_out = self.decision_head(x_2, candidate_states=cand_states)
+
+        if return_diagnostics:
+            # Probe earlier stages
+            probe_0 = self.decision_head(x_0, candidate_states=cand_states)
+            probe_1 = self.decision_head(x_1, candidate_states=cand_states)
+
+            final_out["diagnostics"] = {
+                "stage_names": ["post_pooling", "post_context", "post_constraint"],
+                "stage_logits": torch.stack(
+                    [probe_0["logits"], probe_1["logits"], final_out["logits"]], dim=0
+                ),
+                "stage_knowledge": torch.stack(
+                    [probe_0["knowledge"], probe_1["knowledge"], final_out["knowledge"]], dim=0
+                ),
+                "stage_truth": torch.stack(
+                    [probe_0["truth"], probe_1["truth"], final_out["truth"]], dim=0
+                ),
+                "attributions": torch.stack(
+                    [
+                        probe_0["logits"],
+                        probe_1["logits"] - probe_0["logits"],
+                        final_out["logits"] - probe_1["logits"],
+                    ],
+                    dim=0,
+                ),
+            }
+
+        return final_out
