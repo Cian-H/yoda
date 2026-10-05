@@ -105,7 +105,7 @@ def objective(trial: optuna.Trial, args) -> float:
             "--epochs",
             "10",
             "--batch-size",
-            "32",
+            "8",
         ]
     )
 
