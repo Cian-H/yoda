@@ -172,6 +172,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Weight multiplier for assertion loss (default: 0.1)",
     )
     parser.add_argument(
+        "--margin-weight",
+        type=float,
+        default=0.1,
+        help="Weight for contrastive ranking margin loss",
+    )
+    parser.add_argument(
         "--embed-dim",
         type=int,
         default=None,
@@ -365,20 +371,10 @@ def prepare_datasets(
                 test_ratio=args.test_ratio,
             )
             tr_cnt = (
-                min(tr_n, args.max_train_samples)
-                if args.max_train_samples is not None
-                else tr_n
+                min(tr_n, args.max_train_samples) if args.max_train_samples is not None else tr_n
             )
-            ev_cnt = (
-                min(ev_n, args.max_eval_samples)
-                if args.max_eval_samples is not None
-                else ev_n
-            )
-            te_cnt = (
-                min(te_n, args.max_test_samples)
-                if args.max_test_samples is not None
-                else te_n
-            )
+            ev_cnt = min(ev_n, args.max_eval_samples) if args.max_eval_samples is not None else ev_n
+            te_cnt = min(te_n, args.max_test_samples) if args.max_test_samples is not None else te_n
             train_dataset = YodaDecisionDataset(
                 file_path=train_file,
                 offset=tr_off,
@@ -608,6 +604,7 @@ def main() -> None:
             belnap_weight=args.belnap_weight,
             ltn_weight=args.ltn_weight,
             assertion_weight=args.assertion_weight,
+            margin_weight=args.margin_weight,
             independent_eval=args.independent_eval,
             tensorboard_dir=args.tensorboard_dir,
             checkpoint_dir=args.checkpoint_dir,
