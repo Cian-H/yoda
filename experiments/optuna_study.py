@@ -105,7 +105,7 @@ def objective(trial: optuna.Trial, args) -> float:
             "--epochs",
             "10",
             "--batch-size",
-            "64",
+            "32",
         ]
     )
 
@@ -175,7 +175,7 @@ def main() -> None:
     parser.add_argument(
         "--n-jobs",
         type=int,
-        default=2,
+        default=1,
         help="Number of trials to run in parallel (default: 4)",
     )
     parser.add_argument(
