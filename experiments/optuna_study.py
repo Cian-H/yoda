@@ -25,9 +25,9 @@ def objective(trial: optuna.Trial, args) -> float:
         "text_model_name",
         [
             "sentence-transformers/all-MiniLM-L6-v2",
-            "EmbeddingGemma300M",
-            "harrier-oss-v1-0.6b",
-            "Qwen3-Embedding-0.6B",
+            "BAAI/bge-large-en-v1.5",
+            "intfloat/e5-large-v2",
+            "Alibaba-NLP/gte-large-en-v1.5",
         ],
     )
 
