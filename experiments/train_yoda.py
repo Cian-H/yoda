@@ -37,8 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--freeze-backbone",
         action="store_true",
-        default=True,
-        help="Freeze pretrained text encoder backbone weights (default: True, 100%% frozen)",
+        default=False,
+        help="Freeze pretrained text encoder backbone weights (default: False)",
     )
     parser.add_argument("--unfreeze-backbone", dest="freeze_backbone", action="store_false")
     parser.add_argument(
@@ -116,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--backbone-lr",
+        type=float,
+        default=1e-5,
+        help="Learning rate for the text backbone.",
+    )
     parser.add_argument(
         "--min-lr",
         type=float,
@@ -531,6 +537,7 @@ def main() -> None:
         trainer = YodaTrainer(
             model=model,
             lr=args.lr,
+            backbone_lr=args.backbone_lr,
             min_lr=args.min_lr,
             t0_epochs=args.t0_epochs,
             t_mult=args.t_mult,

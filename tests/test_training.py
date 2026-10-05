@@ -811,6 +811,54 @@ class TestYodaTrainer:
         assert pytest.approx(loss_other.item(), rel=1e-5) == loss.item()
         assert metrics_other["focal_loss"] != metrics["focal_loss"]
 
+    def test_trainer_differential_lr(self, dummy_engine: YodaDecisionEngine) -> None:
+        """Verifies YodaTrainer creates two param groups with correct LRs and assigns
+        text_encoder.model params.
+        """
+        dummy_engine.text_encoder.model = torch.nn.Linear(32, 32)
+        backbone_lr = 1e-5
+        head_lr = 1e-3
+
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            lr=head_lr,
+            backbone_lr=backbone_lr,
+            device="cpu",
+        )
+
+        assert len(trainer.optimizer.param_groups) == 2
+        backbone_group = trainer.optimizer.param_groups[0]
+        head_group = trainer.optimizer.param_groups[1]
+
+        assert backbone_group["lr"] == backbone_lr
+        assert head_group["lr"] == head_lr
+
+        backbone_params = set(backbone_group["params"])
+        head_params = set(head_group["params"])
+
+        assert dummy_engine.text_encoder.model.weight in backbone_params
+        assert dummy_engine.text_encoder.model.bias in backbone_params
+        assert dummy_engine.text_encoder.model.weight not in head_params
+        assert dummy_engine.text_encoder.model.bias not in head_params
+
+        for name, param in dummy_engine.named_parameters():
+            if "text_encoder.model" in name:
+                assert param in backbone_params
+                assert param not in head_params
+            else:
+                assert param in head_params
+                assert param not in backbone_params
+
+        trainer_default = YodaTrainer(
+            model=dummy_engine,
+            lr=head_lr,
+            backbone_lr=None,
+            device="cpu",
+        )
+        assert len(trainer_default.optimizer.param_groups) == 2
+        assert trainer_default.optimizer.param_groups[0]["lr"] == head_lr
+        assert trainer_default.optimizer.param_groups[1]["lr"] == head_lr
+
 
 class TestYodaLightningAdapterScheduler:
     """Verifies scheduler configuration in YodaLightningAdapter."""
@@ -1037,5 +1085,25 @@ def test_train_yoda_cli_belnap_weight_default() -> None:
     parser = build_parser()
     default_args = parser.parse_args([])
     assert default_args.belnap_weight == 1.0
+
+
+def test_train_yoda_cli_differential_lr_args() -> None:
+    """Verifies CLI parsing of --freeze-backbone and --backbone-lr arguments."""
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args([])
+    assert default_args.freeze_backbone is False
+    assert default_args.backbone_lr == 1e-5
+
+    custom_args = parser.parse_args(["--freeze-backbone", "--backbone-lr", "5e-5"])
+    assert custom_args.freeze_backbone is True
+    assert custom_args.backbone_lr == 5e-5
 
 

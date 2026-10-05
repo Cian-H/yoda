@@ -76,6 +76,7 @@ class YodaTrainer:
         model: YodaDecisionEngine,
         optimizer: torch.optim.Optimizer | None = None,
         lr: float = 1e-3,
+        backbone_lr: float | None = None,
         min_lr: float | None = None,
         t0_epochs: int = 2,
         t_mult: int = 2,
@@ -100,6 +101,7 @@ class YodaTrainer:
             model: Top-level YodaDecisionEngine module.
             optimizer: Torch optimizer; defaults to AdamW with specified learning rate.
             lr: Learning rate if default AdamW optimizer is instantiated.
+            backbone_lr: Learning rate for text encoder backbone; defaults to lr if None.
             min_lr: Minimum learning rate for scheduler warmup/annealing floor.
             t0_epochs: Number of epochs for initial cosine cycle length T_0.
             t_mult: Cycle lengthening factor for cosine annealing warm restarts.
@@ -123,6 +125,7 @@ class YodaTrainer:
         self.device = torch.device(device) if isinstance(device, str) else device
         self.model = model.to(self.device)
         self.lr = float(lr)
+        self.backbone_lr = float(backbone_lr) if backbone_lr is not None else self.lr
         self.min_lr = float(min_lr) if min_lr is not None else None
         self.t0_epochs = int(t0_epochs)
         self.t_mult = int(t_mult)
@@ -141,11 +144,22 @@ class YodaTrainer:
         self.independent_eval = bool(independent_eval)
         self._global_step: int = 0
 
-        self.optimizer = (
-            optimizer
-            if optimizer is not None
-            else torch.optim.AdamW(self.model.parameters(), lr=self.lr)
-        )
+        if optimizer is not None:
+            self.optimizer = optimizer
+        else:
+            backbone_params: list[torch.nn.Parameter] = []
+            head_params: list[torch.nn.Parameter] = []
+            for name, param in self.model.named_parameters():
+                if "text_encoder.model" in name:
+                    backbone_params.append(param)
+                else:
+                    head_params.append(param)
+            self.optimizer = torch.optim.AdamW(
+                [
+                    {"params": backbone_params, "lr": self.backbone_lr},
+                    {"params": head_params, "lr": self.lr},
+                ]
+            )
         self.focal_margin_loss_fn = FocalMarginLoss(
             gamma=self.focal_gamma,
             margin=self.margin,
@@ -169,11 +183,12 @@ class YodaTrainer:
             self.checkpoint_dir = None
 
         logger.debug(
-            "YodaTrainer initialized on device={}, lr={}, min_lr={}, "
+            "YodaTrainer initialized on device={}, lr={}, backbone_lr={}, min_lr={}, "
             "t0_epochs={}, t_mult={}, lr_decay={}, "
             "belnap_w={}, ltn_w={}, assertion_w={}",
             self.device,
             self.lr,
+            self.backbone_lr,
             self.min_lr,
             self.t0_epochs,
             self.t_mult,
