@@ -87,7 +87,11 @@ def test_lightning_adapter_fast_dev_run(synthetic_batch: dict[str, Any]) -> None
     engine: Any = DummyDecisionEngine()
     adapter = YodaLightningAdapter(model=engine, lr=1e-3)
 
-    loader = DataLoader([synthetic_batch, synthetic_batch], batch_size=1, collate_fn=lambda x: x[0])
+    loader = DataLoader(
+        [synthetic_batch, synthetic_batch],  # type: ignore
+        batch_size=1,
+        collate_fn=lambda x: x[0],
+    )
     trainer = pl.Trainer(
         accelerator="cpu",
         fast_dev_run=True,

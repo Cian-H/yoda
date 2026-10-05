@@ -9,7 +9,7 @@ import json
 import logging
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 import polars as pl
 
@@ -100,10 +100,10 @@ def run_benchmark(iterations: int = 1000, warmup: int = 50) -> pl.DataFrame:
 
     df = pl.DataFrame({"latency_ms": latencies_ms})
 
-    p50 = float(df["latency_ms"].quantile(0.50))
-    p95 = float(df["latency_ms"].quantile(0.95))
-    p99 = float(df["latency_ms"].quantile(0.99))
-    mean_lat = float(df["latency_ms"].mean())
+    p50 = cast(float, df["latency_ms"].quantile(0.50))
+    p95 = cast(float, df["latency_ms"].quantile(0.95))
+    p99 = cast(float, df["latency_ms"].quantile(0.99))
+    mean_lat = cast(float, df["latency_ms"].mean())
     satisfaction_rate = (satisfied_count / iterations) * 100.0
 
     emit_event(

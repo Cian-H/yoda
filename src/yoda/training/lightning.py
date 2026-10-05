@@ -219,7 +219,7 @@ class YodaLightningAdapter(pl.LightningModule):
             target_f = torch.ones_like(logits)
 
             for b_idx in range(batch_size):
-                t_idx = target_indices[b_idx].item()
+                t_idx = int(target_indices[b_idx].item())
                 target_t[b_idx, t_idx] = 1.0
                 target_f[b_idx, t_idx] = 0.0
 

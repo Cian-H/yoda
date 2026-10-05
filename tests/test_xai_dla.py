@@ -53,7 +53,11 @@ def test_dla_evaluator_computes_metrics() -> None:
         "target_indices": torch.tensor([0, 1]),
         "task_scalars": torch.tensor([[1.0], [1.0]]),
     }
-    loader = DataLoader([batch], batch_size=1, collate_fn=lambda x: x[0])
+    loader = DataLoader(
+        [batch],  # type: ignore
+        batch_size=1,
+        collate_fn=lambda x: x[0],
+    )
 
     evaluator = DirectLogitAttribution()
     report = evaluator.evaluate(model=model, eval_loader=loader, device="cpu")
@@ -72,7 +76,9 @@ def test_dla_evaluator_computes_metrics() -> None:
 
 def test_dla_evaluator_handles_empty_loader() -> None:
     model: Any = MockDLAEngine()
-    loader: DataLoader[dict[str, Any]] = DataLoader([])
+    loader: DataLoader[dict[str, Any]] = DataLoader(
+        [],  # type: ignore
+    )
     evaluator = DirectLogitAttribution()
     report = evaluator.evaluate(model=model, eval_loader=loader, device="cpu")
     assert report == {}
@@ -87,6 +93,10 @@ def test_run_dla_evaluation_convenience_function() -> None:
         "constraints": [[]],
         "target_indices": torch.tensor([0]),
     }
-    loader = DataLoader([batch], batch_size=1, collate_fn=lambda x: x[0])
+    loader = DataLoader(
+        [batch],  # type: ignore
+        batch_size=1,
+        collate_fn=lambda x: x[0],
+    )
     report = run_dla_evaluation(model=model, eval_loader=loader, device="cpu", print_report=False)
     assert report["total_samples"] == 1

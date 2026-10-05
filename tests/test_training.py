@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import torch
@@ -306,7 +306,12 @@ class TestYodaTrainer:
             }
             for i in range(10)
         ]
-        return DataLoader(samples, batch_size=4, shuffle=False, collate_fn=collate_decision_batch)
+        return DataLoader(
+            samples,  # type: ignore
+            batch_size=4,
+            shuffle=False,
+            collate_fn=collate_decision_batch,
+        )
 
     def test_trainer_step_and_loss_decrease(
         self,
@@ -496,7 +501,7 @@ class TestYodaTrainer:
                 },
             )
 
-        trainer._compute_loss_and_metrics = nan_compute  # type: ignore[method-assign]
+        trainer._compute_loss_and_metrics = nan_compute  # type: ignore
         warnings: list[str] = []
         handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
         try:
@@ -505,7 +510,7 @@ class TestYodaTrainer:
             assert metrics["loss"] == 0.0
         finally:
             logger.remove(handler_id)
-            trainer._compute_loss_and_metrics = original_compute
+            trainer._compute_loss_and_metrics = original_compute  # type: ignore
 
     def test_trainer_loss_spike_warning(
         self,
@@ -549,11 +554,11 @@ class TestYodaTrainer:
                 "knowledge_sum": 0.5,
             }
 
-        trainer._compute_loss_and_metrics = spike_compute  # type: ignore[method-assign]
+        trainer._compute_loss_and_metrics = spike_compute  # type: ignore
         warnings: list[str] = []
         handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
         try:
-            trainer.train_epoch([batch1, batch2])  # type: ignore[arg-type]
+            trainer.train_epoch([batch1, batch2])  # type: ignore
             assert any("Loss spike detected" in w for w in warnings)
         finally:
             logger.remove(handler_id)
@@ -583,7 +588,7 @@ class TestYodaTrainer:
                 "knowledge_sum": 0.0,
             }
 
-        trainer._compute_loss_and_metrics = zero_grad_compute  # type: ignore[method-assign]
+        trainer._compute_loss_and_metrics = zero_grad_compute  # type: ignore
         warnings: list[str] = []
         handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
         try:
@@ -642,12 +647,13 @@ class TestYodaTrainer:
         assert hasattr(trainer, "assertion_scheduler")
         assert trainer.ltn_scheduler.max_weight == 0.2
         assert trainer.scheduler is not None
-        assert trainer.ltn_scheduler.t0_steps == trainer.scheduler.T_0
+        sched = cast(torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, trainer.scheduler)
+        assert trainer.ltn_scheduler.t0_steps == sched.T_0
         assert trainer.ltn_scheduler.start_step == 0
 
         assert trainer.assertion_scheduler.max_weight == 0.1
-        assert trainer.assertion_scheduler.t0_steps == trainer.scheduler.T_0
-        assert trainer.assertion_scheduler.start_step == trainer.scheduler.T_0
+        assert trainer.assertion_scheduler.t0_steps == sched.T_0
+        assert trainer.assertion_scheduler.start_step == sched.T_0
 
     def test_trainer_evaluate_strict_weights(
         self,

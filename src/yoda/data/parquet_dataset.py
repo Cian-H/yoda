@@ -75,7 +75,8 @@ class YodaParquetDataset(Dataset[dict[str, Any]]):
     def __len__(self) -> int:
         return len(self._queries)
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        idx = index
         choices = self._choices[idx]
         num_active = self._num_actives[idx]
         target_idx = self._target_indices[idx]

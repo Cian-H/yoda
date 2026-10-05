@@ -3,7 +3,7 @@
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from loguru import logger
@@ -343,9 +343,7 @@ class YodaTrainer:
         logits = out["logits"]
         batch_size, num_choices = logits.shape
 
-        _, loss_parts = self.focal_margin_loss_fn(
-            logits, target_indices, active_mask=active_mask
-        )
+        _, loss_parts = self.focal_margin_loss_fn(logits, target_indices, active_mask=active_mask)
         focal_loss = loss_parts["focal_loss"]
         margin_loss = loss_parts["margin_loss"]
 
@@ -356,12 +354,8 @@ class YodaTrainer:
         incorrect_mask = (preds != labels).float()
         assertion_loss = (incorrect_mask * max_probs).mean()
 
-        target_t = torch.zeros(
-            (batch_size, num_choices), device=self.device, dtype=torch.float32
-        )
-        target_f = torch.ones(
-            (batch_size, num_choices), device=self.device, dtype=torch.float32
-        )
+        target_t = torch.zeros((batch_size, num_choices), device=self.device, dtype=torch.float32)
+        target_f = torch.ones((batch_size, num_choices), device=self.device, dtype=torch.float32)
 
         target_t.scatter_(1, target_indices.unsqueeze(1), 1.0)
         target_f.scatter_(1, target_indices.unsqueeze(1), 0.0)
@@ -529,6 +523,15 @@ class YodaTrainer:
             total_samples += b_size
             total_knowledge += metrics["knowledge_sum"]
 
+            if self._global_step % 100 == 0:
+                step_acc = (total_correct / max(total_samples, 1.0)) * 100.0
+                logger.info(
+                    "Step {} | Loss: {:.4f} | Running Acc: {:.2f}%",
+                    self._global_step,
+                    loss.item(),
+                    step_acc,
+                )
+
         if total_samples == 0.0:
             return {
                 "loss": 0.0,
@@ -655,17 +658,18 @@ class YodaTrainer:
             )
 
         if self.scheduler is not None and hasattr(self.scheduler, "T_0"):
+            sched = cast(torch.optim.lr_scheduler.CosineAnnealingWarmRestarts, self.scheduler)
             self.ltn_scheduler = CyclicalConstraintScheduler(
                 self.ltn_w,
-                t0_steps=self.scheduler.T_0,
-                t_mult=self.scheduler.T_mult,
+                t0_steps=sched.T_0,
+                t_mult=sched.T_mult,
                 start_step=0,
             )
             self.assertion_scheduler = CyclicalConstraintScheduler(
                 self.assertion_w,
-                t0_steps=self.scheduler.T_0,
-                t_mult=self.scheduler.T_mult,
-                start_step=self.scheduler.T_0,
+                t0_steps=sched.T_0,
+                t_mult=sched.T_mult,
+                start_step=sched.T_0,
             )
 
         best_eval_loss = float("inf")
