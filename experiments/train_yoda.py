@@ -270,6 +270,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable pinned memory for faster host-to-device transfers",
     )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="float32",
+        choices=["float32", "bfloat16", "bf16", "float16", "fp16"],
+        help="Training precision ('float32', 'bfloat16', 'float16')",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=None,
+        help="Number of epochs without eval loss improvement before stopping training early",
+    )
     parser.add_argument("--seed", type=int, default=42)
     return parser
 
@@ -609,6 +622,8 @@ def main() -> None:
             tensorboard_dir=args.tensorboard_dir,
             checkpoint_dir=args.checkpoint_dir,
             device=device,
+            precision=args.precision,
+            early_stopping_patience=args.early_stopping_patience,
         )
 
         logger.info("Starting {}-epoch training run with native YodaTrainer...", args.epochs)
