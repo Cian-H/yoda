@@ -667,3 +667,7 @@ class DatasetIngestionPipeline:
         }
         logger.info("data.ingest.pipeline_complete", extra=stats)
         return stats
+
+if __name__ == "__main__":
+    pipeline = DatasetIngestionPipeline()
+    pipeline.run_pipeline()
