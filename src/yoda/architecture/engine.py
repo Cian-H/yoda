@@ -5,7 +5,7 @@ and Phase 4 (Decision Head) using the Cascaded Cross-Attention (Sequential Inter
 """
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -305,12 +305,14 @@ class YodaDecisionEngine(nn.Module):
     @property
     def context_reasoning(self) -> BelnapTransformerBlock:
         """First context reasoning block (for backward compatibility)."""
-        return self.reasoning_layers[0]["context"]  # type: ignore[return-value]
+        layer = cast(nn.ModuleDict, self.reasoning_layers[0])
+        return cast(BelnapTransformerBlock, layer["context"])
 
     @property
     def constraint_reasoning(self) -> BelnapTransformerBlock:
         """First constraint reasoning block (for backward compatibility)."""
-        return self.reasoning_layers[0]["constraint"]  # type: ignore[return-value]
+        layer = cast(nn.ModuleDict, self.reasoning_layers[0])
+        return cast(BelnapTransformerBlock, layer["constraint"])
 
     def forward(
         self,
@@ -372,8 +374,9 @@ class YodaDecisionEngine(nn.Module):
 
         curr_state = q_state
         for idx, layer in enumerate(self.reasoning_layers):
-            context_block = layer["context"]
-            constraint_block = layer["constraint"]
+            layer_dict = cast(nn.ModuleDict, layer)
+            context_block = cast(BelnapTransformerBlock, layer_dict["context"])
+            constraint_block = cast(BelnapTransformerBlock, layer_dict["constraint"])
             curr_state = context_block(x=curr_state, context=c_state)
             suffix = f"_{idx}" if len(self.reasoning_layers) > 1 else ""
             stage_names.append(f"post_context{suffix}")
@@ -408,7 +411,7 @@ class YodaDecisionEngine(nn.Module):
                 }
             return final_out
 
-        legacy_constraints: list[list[str]] = target_cand  # type: ignore[assignment]
+        legacy_constraints: list[list[str]] = cast(list[list[str]], target_cand)
         return self._legacy_forward(
             final_state=final_state,
             k_state=k_state,

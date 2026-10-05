@@ -113,6 +113,7 @@ def test_ltn_constraint_loss_with_active_mask():
     loss.backward()
 
     # Inactive positions should receive zero gradient
+    assert choice_pos.grad is not None
     assert choice_pos.grad[0, 2] == 0.0
     assert choice_pos.grad[0, 3] == 0.0
     assert choice_pos.grad[1, 3] == 0.0
@@ -172,6 +173,7 @@ def test_boundedness_constraint_for_scoring() -> None:
     loss.backward()
 
     # Logits 0 and 1 violated [-3, 3] and must receive gradients
+    assert logits.grad is not None
     assert logits.grad[0] > 0.0  # s > 3 -> penalize downward
     assert logits.grad[1] < 0.0  # s < -3 -> penalize upward
     # Logits 2 and 3 belong to choice task (scalar = 1.0) and must receive zero boundedness gradient
@@ -202,6 +204,7 @@ def test_hierarchical_implication_constraint() -> None:
     loss.backward()
 
     # Violation on (0, 1): t_0 > t_1 -> grad on 0 should push down, grad on 1 push up
+    assert truth.grad is not None
     assert truth.grad[0] > 0.0
     assert truth.grad[1] < 0.0
     # No violation on (2, 3): t_2 <= t_3 -> zero implication gradient
@@ -276,6 +279,7 @@ def test_decisiveness_penalty() -> None:
     loss = criterion(outputs_grad)
     loss.backward()
     # At 0.4 (< 0.5): gradient is positive (pushes down towards 0)
+    assert pos.grad is not None
     assert pos.grad[0] > 0.0
     # At 0.6 (> 0.5): gradient is negative (pushes up towards 1)
     assert pos.grad[1] < 0.0

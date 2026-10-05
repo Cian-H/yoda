@@ -102,8 +102,10 @@ def objective(trial: optuna.Trial, args) -> float:
             str(trial_dir),
             "--output-model",
             str(trial_dir / "model.pt"),
+            "--max-samples",
+            "8000",
             "--epochs",
-            "10",
+            "4",
             "--batch-size",
             "8",
         ]

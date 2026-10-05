@@ -1,13 +1,13 @@
 """Tests for top-level YodaDecisionEngine and BelnapDecisionHead."""
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 from torch import nn
 
-from yoda.architecture.belnap_transformer import BelnapState
+from yoda.architecture.belnap_transformer import BelnapState, BelnapTransformerBlock
 from yoda.architecture.engine import BelnapDecisionHead, YodaDecisionEngine
 
 
@@ -88,8 +88,9 @@ class TestYodaDecisionEngine:
         assert engine.d_hidden_multiplier == 2.0
         assert engine.dropout == 0.0
         assert len(engine.reasoning_layers) == 1
-        assert engine.context_reasoning is engine.reasoning_layers[0]["context"]
-        assert engine.constraint_reasoning is engine.reasoning_layers[0]["constraint"]
+        first_layer = cast(nn.ModuleDict, engine.reasoning_layers[0])
+        assert engine.context_reasoning is first_layer["context"]
+        assert engine.constraint_reasoning is first_layer["constraint"]
         assert isinstance(engine.decision_head, BelnapDecisionHead)
 
     def test_forward_pass_shapes(self, dummy_engine: YodaDecisionEngine) -> None:
@@ -355,7 +356,8 @@ class TestYodaDecisionEngine:
         assert len(engine.reasoning_layers) == 3
 
         for layer in engine.reasoning_layers:
-            ctx_block = layer["context"]
+            layer_dict = cast(nn.ModuleDict, layer)
+            ctx_block = cast(BelnapTransformerBlock, layer_dict["context"])
             assert ctx_block.d_model == 64
             assert ctx_block.residual_weight == 0.6
             assert ctx_block.dropout == 0.1
@@ -363,7 +365,7 @@ class TestYodaDecisionEngine:
             assert ctx_block.ffn.conflation_weight == 0.25
             assert ctx_block.ffn.dropout.p == 0.1
 
-            const_block = layer["constraint"]
+            const_block = cast(BelnapTransformerBlock, layer_dict["constraint"])
             assert const_block.d_model == 64
             assert const_block.residual_weight == 0.6
             assert const_block.dropout == 0.1
@@ -392,8 +394,9 @@ class TestYodaDecisionEngine:
         loss.backward()
 
         for idx, layer in enumerate(engine.reasoning_layers):
-            ctx_block = layer["context"]
-            const_block = layer["constraint"]
+            layer_dict = cast(nn.ModuleDict, layer)
+            ctx_block = cast(BelnapTransformerBlock, layer_dict["context"])
+            const_block = cast(BelnapTransformerBlock, layer_dict["constraint"])
             assert ctx_block.cross_attn.w_q_pos.weight.grad is not None, (
                 f"Block {idx} ctx grad missing"
             )
