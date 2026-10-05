@@ -1107,3 +1107,57 @@ def test_train_yoda_cli_differential_lr_args() -> None:
     assert custom_args.backbone_lr == 5e-5
 
 
+def test_train_yoda_cli_topological_args() -> None:
+    """Verifies CLI parsing and defaults for topological hyperparameters."""
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args([])
+    assert default_args.num_q_probes == 4
+    assert default_args.num_c_probes == 8
+    assert default_args.num_k_probes is None
+    assert default_args.n_heads == 4
+    assert default_args.conflation_weight == 0.1
+    assert default_args.residual_weight == 0.5
+    assert default_args.dropout == 0.0
+    assert default_args.num_reasoning_blocks == 1
+    assert default_args.d_hidden_multiplier == 2.0
+
+    custom_args = parser.parse_args([
+        "--num-q-probes",
+        "6",
+        "--num-c-probes",
+        "12",
+        "--num-k-probes",
+        "7",
+        "--n-heads",
+        "8",
+        "--conflation-weight",
+        "0.2",
+        "--residual-weight",
+        "0.7",
+        "--dropout",
+        "0.15",
+        "--num-reasoning-blocks",
+        "3",
+        "--d-hidden-multiplier",
+        "4.0",
+    ])
+    assert custom_args.num_q_probes == 6
+    assert custom_args.num_c_probes == 12
+    assert custom_args.num_k_probes == 7
+    assert custom_args.n_heads == 8
+    assert custom_args.conflation_weight == 0.2
+    assert custom_args.residual_weight == 0.7
+    assert custom_args.dropout == 0.15
+    assert custom_args.num_reasoning_blocks == 3
+    assert custom_args.d_hidden_multiplier == 4.0
+
+
+

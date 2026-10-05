@@ -191,6 +191,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--num-choices", type=int, default=5)
     parser.add_argument(
+        "--num-q-probes",
+        type=int,
+        default=4,
+        help="Number of query epistemic probe tokens for Belnap MPA (default: 4)",
+    )
+    parser.add_argument(
+        "--num-c-probes",
+        type=int,
+        default=8,
+        help="Number of context epistemic probe tokens for Belnap MPA (default: 8)",
+    )
+    parser.add_argument(
+        "--num-k-probes",
+        type=int,
+        default=None,
+        help="Number of constraint probes for Belnap MPA (default: None, adopts num-choices)",
+    )
+    parser.add_argument(
+        "--n-heads",
+        type=int,
+        default=4,
+        help="Number of attention heads for Belnap attention and transformer blocks (default: 4)",
+    )
+    parser.add_argument(
+        "--conflation-weight",
+        type=float,
+        default=0.1,
+        help="Weight lambda for contradictory evidence pruning in Belnap bilattice (default: 0.1)",
+    )
+    parser.add_argument(
+        "--residual-weight",
+        type=float,
+        default=0.5,
+        help="Interpolation weight alpha for convex combination residual joins (default: 0.5)",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.0,
+        help="Dropout probability in Belnap blocks and FFN (default: 0.0)",
+    )
+    parser.add_argument(
+        "--num-reasoning-blocks",
+        type=int,
+        default=1,
+        help="Number of cascaded reasoning transformer blocks (default: 1)",
+    )
+    parser.add_argument(
+        "--d-hidden-multiplier",
+        type=float,
+        default=2.0,
+        help="Multiplier for FFN hidden dimensionality relative to d_model (default: 2.0)",
+    )
+    parser.add_argument(
         "--shuffle-choices",
         action="store_true",
         default=True,
@@ -459,20 +513,29 @@ def main() -> None:
         pin_memory=args.pin_memory,
     )
 
+    num_k_probes = args.num_k_probes if args.num_k_probes is not None else args.num_choices
     logger.info(
-        "Instantiating YodaDecisionEngine (backbone={}, embed_dim={}, num_choices={})...",
+        "Instantiating YodaDecisionEngine (backbone={}, embed_dim={}, num_choices={}, "
+        "num_reasoning_blocks={}, dropout={})...",
         args.text_model_name,
         str(args.embed_dim),
         args.num_choices,
+        args.num_reasoning_blocks,
+        args.dropout,
     )
     model = YodaDecisionEngine(
         text_model_name=args.text_model_name,
         embed_dim=args.embed_dim,
-        num_q_probes=4,
-        num_c_probes=8,
-        num_k_probes=args.num_choices,
+        num_q_probes=args.num_q_probes,
+        num_c_probes=args.num_c_probes,
+        num_k_probes=num_k_probes,
         num_choices=args.num_choices,
-        n_heads=4,
+        n_heads=args.n_heads,
+        num_reasoning_blocks=args.num_reasoning_blocks,
+        conflation_weight=args.conflation_weight,
+        d_hidden_multiplier=args.d_hidden_multiplier,
+        residual_weight=args.residual_weight,
+        dropout=args.dropout,
         device=device,
     )
     model = model.to(device)
@@ -633,6 +696,15 @@ def main() -> None:
             "config": {
                 "embed_dim": args.embed_dim,
                 "num_choices": args.num_choices,
+                "num_q_probes": args.num_q_probes,
+                "num_c_probes": args.num_c_probes,
+                "num_k_probes": num_k_probes,
+                "n_heads": args.n_heads,
+                "conflation_weight": args.conflation_weight,
+                "residual_weight": args.residual_weight,
+                "dropout": args.dropout,
+                "num_reasoning_blocks": args.num_reasoning_blocks,
+                "d_hidden_multiplier": args.d_hidden_multiplier,
                 "epochs": args.epochs,
                 "history": history,
                 "test_metrics": test_metrics,
