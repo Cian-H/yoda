@@ -82,11 +82,9 @@ def objective(trial: optuna.Trial) -> float:
         "--output-model",
         str(trial_dir / "model.pt"),
         "--epochs",
-        "4",
-        "--max-samples",
-        "2000",
+        "10",
         "--batch-size",
-        "16",
+        "64",
     ]
 
     logger.info(
@@ -149,8 +147,8 @@ def main() -> None:
     parser.add_argument(
         "--n-trials",
         type=int,
-        default=50,
-        help="Number of Optuna optimization trials (default: 50)",
+        default=250,
+        help="Number of Optuna optimization trials (default: 250)",
     )
     parser.add_argument(
         "--study-name",
