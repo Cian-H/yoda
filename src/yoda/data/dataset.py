@@ -181,9 +181,9 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         """Returns the number of loaded and standardized samples."""
         return len(self._samples)
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, index: int) -> dict[str, Any]:
         """Retrieves a standardized sample by index, optionally shuffling choices."""
-        sample = self._samples[idx]
+        sample = self._samples[index]
         active = sample["active_choices"]
         target_idx = sample["target_idx"]
         question_type = sample.get("question_type", "null")
@@ -273,10 +273,7 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         s = item["state"]
         raw_c = item["constraints"]
         t_idx = item.get("target_idx", -1)
-        n_act = item.get(
-            "num_active",
-            sum(1 for c in raw_c if not str(c).startswith("none:")),
-        )
+        n_act = num_actives[b_idx]
         task_sc = float(item.get("task_scalar", -1.0))
         active_c = raw_c[:n_act]
         for c_idx, c_str in enumerate(active_c):

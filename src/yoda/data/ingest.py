@@ -9,14 +9,25 @@ import json
 import logging
 import shutil
 import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TextIO
 
 import polars as pl
 
 from yoda.architecture.schema import DecisionPayload, QueryContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _IngestionTask:
+    path: Path
+    is_train: bool
+    fmt: str
+    parse_fn: Callable[..., list[DecisionPayload] | DecisionPayload | None]
+    extra_arg: str | None = None
 
 
 class DatasetIngestionPipeline:
@@ -214,9 +225,10 @@ class DatasetIngestionPipeline:
             ):
                 try:
                     return json.loads(text)
-                except Exception:
-                    pass
-        return fallback if fallback is not None else data
+                except (json.JSONDecodeError, ValueError):
+                    return fallback
+            return fallback
+        return fallback
 
     @classmethod
     def _try_parse_json_dict(cls, text: str) -> dict[str, Any] | None:
@@ -468,136 +480,157 @@ class DatasetIngestionPipeline:
         return payloads
 
     @staticmethod
-    def _write_payloads(payloads: list[DecisionPayload], target_file: Any) -> int:
+    def _write_payloads(
+        payloads: list[DecisionPayload] | DecisionPayload, target_file: TextIO
+    ) -> int:
+        """Writes serialized DecisionPayload record(s) to target text stream."""
+        if isinstance(payloads, DecisionPayload):
+            target_file.write(payloads.model_dump_json() + "\n")
+            return 1
         count = 0
         for p in payloads:
             target_file.write(p.model_dump_json() + "\n")
             count += 1
         return count
 
-    def _stream_datasets(self, f_train: Any, f_eval: Any) -> tuple[int, int]:
-        train_count, eval_count = 0, 0
-
-        # Format: (path, target_file, is_train, format, parse_fn, *args)
-        tasks = [
+    def _get_ingestion_tasks(self) -> list[_IngestionTask]:
+        """Constructs the list of ingestion tasks for supported raw dataset files."""
+        return [
             # Nimble
-            (self.raw_nimble / "train.jsonl", f_train, True, "jsonl", self.parse_nimble_record),
-            (self.raw_nimble / "eval.jsonl", f_eval, False, "jsonl", self.parse_nimble_record),
+            _IngestionTask(
+                self.raw_nimble / "train.jsonl", True, "jsonl", self.parse_nimble_record
+            ),
+            _IngestionTask(
+                self.raw_nimble / "eval.jsonl", False, "jsonl", self.parse_nimble_record
+            ),
             # Kev
-            (
+            _IngestionTask(
                 self.raw_kev / "decision_v1_train.jsonl",
-                f_train,
                 True,
                 "jsonl",
                 self.parse_kev_record,
                 "v1_train",
             ),
-            (
+            _IngestionTask(
                 self.raw_kev / "decision_v1_test.jsonl",
-                f_eval,
                 False,
                 "jsonl",
                 self.parse_kev_record,
                 "v1_test",
             ),
-            (
+            _IngestionTask(
                 self.raw_kev / "decision_v2_train.jsonl",
-                f_train,
                 True,
                 "jsonl",
                 self.parse_kev_record,
                 "v2_train",
             ),
-            (
+            _IngestionTask(
                 self.raw_kev / "decision_v2_test.jsonl",
-                f_eval,
                 False,
                 "jsonl",
                 self.parse_kev_record,
                 "v2_test",
             ),
             # Dwidlee
-            (
+            _IngestionTask(
                 self.raw_dwidlee_gen / "train.parquet",
-                f_train,
                 True,
                 "parquet",
                 self.parse_dwidlee_row,
                 "dwidlee_gen",
             ),
-            (
+            _IngestionTask(
                 self.raw_dwidlee_gen / "test.parquet",
-                f_eval,
                 False,
                 "parquet",
                 self.parse_dwidlee_row,
                 "dwidlee_gen",
             ),
-            (
+            _IngestionTask(
                 self.raw_dwidlee_p2 / "train.parquet",
-                f_train,
                 True,
                 "parquet",
                 self.parse_dwidlee_row,
                 "dwidlee_p2",
             ),
-            (
+            _IngestionTask(
                 self.raw_dwidlee_p2 / "test.parquet",
-                f_eval,
                 False,
                 "parquet",
                 self.parse_dwidlee_row,
                 "dwidlee_p2",
             ),
             # N4ze3m
-            (self.raw_n4ze3m / "train.jsonl", f_train, True, "jsonl", self.parse_n4ze3m_record),
-            (
+            _IngestionTask(
+                self.raw_n4ze3m / "train.jsonl", True, "jsonl", self.parse_n4ze3m_record
+            ),
+            _IngestionTask(
                 self.raw_n4ze3m / "validation.jsonl",
-                f_eval,
                 False,
                 "jsonl",
                 self.parse_n4ze3m_record,
             ),
             # Mghafiri
-            (
-                self.raw_mghafiri / "train.jsonl",
-                f_train,
-                True,
-                "jsonl",
-                self.parse_mghafiri_record,
+            _IngestionTask(
+                self.raw_mghafiri / "train.jsonl", True, "jsonl", self.parse_mghafiri_record
             ),
-            (
+            _IngestionTask(
                 self.raw_mghafiri / "validation.jsonl",
-                f_eval,
                 False,
                 "jsonl",
                 self.parse_mghafiri_record,
             ),
-            (self.raw_mghafiri / "test.jsonl", f_eval, False, "jsonl", self.parse_mghafiri_record),
+            _IngestionTask(
+                self.raw_mghafiri / "test.jsonl", False, "jsonl", self.parse_mghafiri_record
+            ),
         ]
 
-        for pth, target_file, is_train, fmt, parse_fn, *args in tasks:
-            if not pth.exists():
-                continue
+    def _execute_task(self, task: _IngestionTask, target_file: TextIO) -> int:
+        """Executes a single file parsing task and streams payloads into target_file."""
+        if not task.path.exists():
+            return 0
 
-            c = 0
-            if fmt == "jsonl":
-                with open(pth, encoding="utf-8") as f:
-                    for line in f:
-                        if line.strip():
-                            parsed = parse_fn(json.loads(line), *args)
-                            c += self._write_payloads(parsed, target_file)
-            elif fmt == "parquet":
-                df = pl.read_parquet(pth)
-                for row in df.iter_rows(named=True):
-                    payload = parse_fn(row, *args)
-                    target_file.write(payload.model_dump_json() + "\n")
-                    c += 1
+        count = 0
+        if task.fmt == "jsonl":
+            with open(task.path, encoding="utf-8") as f:
+                for line in f:
+                    line_str = line.strip()
+                    if not line_str:
+                        continue
+                    record = json.loads(line_str)
+                    parsed = (
+                        task.parse_fn(record, task.extra_arg)
+                        if task.extra_arg is not None
+                        else task.parse_fn(record)
+                    )
+                    if parsed:
+                        count += self._write_payloads(parsed, target_file)
+        elif task.fmt == "parquet":
+            df = pl.read_parquet(task.path)
+            for row in df.iter_rows(named=True):
+                payload = (
+                    task.parse_fn(row, task.extra_arg)
+                    if task.extra_arg is not None
+                    else task.parse_fn(row)
+                )
+                if payload:
+                    count += self._write_payloads(payload, target_file)
 
-            if is_train:
-                train_count += c
+        return count
+
+    def _stream_datasets(self, f_train: TextIO, f_eval: TextIO) -> tuple[int, int]:
+        """Streams raw dataset files into train and evaluation JSONL files."""
+        train_count, eval_count = 0, 0
+        tasks = self._get_ingestion_tasks()
+
+        for task in tasks:
+            target_file = f_train if task.is_train else f_eval
+            records_written = self._execute_task(task, target_file)
+            if task.is_train:
+                train_count += records_written
             else:
-                eval_count += c
+                eval_count += records_written
 
         return train_count, eval_count
 
