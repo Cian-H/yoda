@@ -691,6 +691,126 @@ class TestYodaTrainer:
         trainer.close()
         assert (tmp_path / "tb").exists()
 
+    def test_trainer_default_belnap_weight(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        """Verifies that YodaTrainer defaults belnap_weight to 1.0."""
+        trainer = YodaTrainer(model=dummy_engine)
+        assert trainer.belnap_weight == 1.0
+
+    def test_trainer_total_loss_formula_legacy(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies legacy total_loss excludes focal_loss and matches the weighted sum formula."""
+        dummy_engine.eval()
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            belnap_weight=1.5,
+            margin_weight=0.25,
+            ltn_weight=0.35,
+            assertion_weight=0.1,
+            device="cpu",
+        )
+        batch = next(iter(synthetic_loader))
+
+        torch.manual_seed(123)
+        loss, metrics = trainer._compute_loss_and_metrics(batch)
+
+        assert "focal_loss" in metrics
+        assert "ce_loss" in metrics
+        assert "belnap_loss" in metrics
+        assert "margin_loss" in metrics
+        assert "ltn_loss" in metrics
+        assert "assertion_loss" in metrics
+
+        expected_total = (
+            metrics["belnap_loss"] * 1.5
+            + metrics["margin_loss"] * 0.25
+            + metrics["ltn_loss"] * 0.35
+            + metrics["assertion_loss"] * 0.1
+        )
+        assert pytest.approx(loss.item(), rel=1e-5) == expected_total
+
+        # Verify focal_loss does not drive total_loss
+        trainer_other_focal = YodaTrainer(
+            model=dummy_engine,
+            belnap_weight=1.5,
+            margin_weight=0.25,
+            ltn_weight=0.35,
+            assertion_weight=0.1,
+            focal_gamma=5.0,
+            device="cpu",
+        )
+        torch.manual_seed(123)
+        loss_other_focal, metrics_other_focal = trainer_other_focal._compute_loss_and_metrics(batch)
+        assert pytest.approx(loss_other_focal.item(), rel=1e-5) == loss.item()
+        assert metrics_other_focal["focal_loss"] != metrics["focal_loss"]
+
+    def test_trainer_total_loss_formula_independent(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        """Verifies independent total_loss excludes focal_loss and matches the formula."""
+        dummy_engine.eval()
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            independent_eval=True,
+            belnap_weight=1.2,
+            margin_weight=0.3,
+            ltn_weight=0.4,
+            assertion_weight=0.2,
+            device="cpu",
+        )
+        batch = {
+            "queries": ["Q1", "Q2"],
+            "states": [{"k": 1}, {"k": 2}],
+            "constraints": [["c1", "c2"], ["c3", "c4"]],
+            "target_indices": torch.tensor([0, 1]),
+            "task_scalars": torch.tensor([[1.0], [1.0]]),
+            "candidates": ["c1", "c2", "c3", "c4"],
+            "candidate_queries": ["Q1", "Q1", "Q2", "Q2"],
+            "candidate_states": [{"k": 1}, {"k": 1}, {"k": 2}, {"k": 2}],
+            "candidate_labels": torch.tensor([1.0, 0.0, 0.0, 1.0]),
+            "candidate_group_ids": torch.tensor([0, 0, 1, 1]),
+            "candidate_task_scalars": torch.tensor([[1.0], [1.0], [1.0], [1.0]]),
+        }
+        torch.manual_seed(123)
+        loss, metrics = trainer._compute_loss_and_metrics(batch)
+
+        assert "focal_loss" in metrics
+        assert "ce_loss" in metrics
+        assert "belnap_loss" in metrics
+        assert "margin_loss" in metrics
+        assert "ltn_loss" in metrics
+        assert "assertion_loss" in metrics
+
+        expected_total = (
+            metrics["belnap_loss"] * 1.2
+            + metrics["margin_loss"] * 0.3
+            + metrics["ltn_loss"] * 0.4
+            + metrics["assertion_loss"] * 0.2
+        )
+        assert pytest.approx(loss.item(), rel=1e-5) == expected_total
+
+        # Verify focal_loss does not drive total_loss
+        trainer_other_focal = YodaTrainer(
+            model=dummy_engine,
+            independent_eval=True,
+            belnap_weight=1.2,
+            margin_weight=0.3,
+            ltn_weight=0.4,
+            assertion_weight=0.2,
+            focal_gamma=5.0,
+            device="cpu",
+        )
+        torch.manual_seed(123)
+        loss_other, metrics_other = trainer_other_focal._compute_loss_and_metrics(batch)
+        assert pytest.approx(loss_other.item(), rel=1e-5) == loss.item()
+        assert metrics_other["focal_loss"] != metrics["focal_loss"]
+
 
 class TestYodaLightningAdapterScheduler:
     """Verifies scheduler configuration in YodaLightningAdapter."""
@@ -902,5 +1022,20 @@ def test_cyclical_constraint_scheduler_zero_max_weight() -> None:
     sched = CyclicalConstraintScheduler(max_weight=0.0, t0_steps=10)
     for step in range(50):
         assert sched.get_weight(step) == 0.0
+
+
+def test_train_yoda_cli_belnap_weight_default() -> None:
+    """Verifies CLI parsing of --belnap-weight defaults to 1.0."""
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args([])
+    assert default_args.belnap_weight == 1.0
 
 

@@ -1,9 +1,8 @@
 """Logic Tensor Network (LTN) semantic constraints for Yoda Decision Engine.
 
 Implements differentiable probabilistic and t-norm logic constraints:
-1. Epistemic Regularization (Belnap Bilattice):
-   - Gullibility penalty: knowledge.mean() * gullibility_weight
-   - Ignorance penalty: ignorance.mean() * ignorance_weight
+1. Decisiveness Penalty:
+   (choice_pos * (1.0 - choice_pos) + choice_neg * (1.0 - choice_neg)).mean() * decisiveness_weight
 2. Exactly-One XOR (Choice Tasks, task_scalar > 0.75):
    -log(sum_i t_i prod_{j != i} (1 - t_j) + eps)
 3. At-Least-One OR (Multi-Choice Tasks, 0.25 < task_scalar <= 0.75):
@@ -41,8 +40,7 @@ class LTNConstraintLoss(nn.Module):
         bound_b: float = 3.0,
         bound_weight: float = 1.0,
         hierarchy_weight: float = 1.0,
-        gullibility_weight: float = 0.1,
-        ignorance_weight: float = 0.1,
+        decisiveness_weight: float = 0.1,
         eps: float = 1e-7,
     ) -> None:
         """Initializes LTNConstraintLoss.
@@ -52,8 +50,7 @@ class LTNConstraintLoss(nn.Module):
             bound_b: Upper operational bound for continuous scoring / null tasks.
             bound_weight: Multiplier weight for operational box boundedness loss.
             hierarchy_weight: Multiplier weight for hierarchical implication loss.
-            gullibility_weight: Multiplier weight for epistemic gullibility penalty.
-            ignorance_weight: Multiplier weight for epistemic ignorance penalty.
+            decisiveness_weight: Multiplier weight for decisiveness penalty.
             eps: Epsilon for numerical stability inside log evaluations.
         """
         super().__init__()
@@ -61,8 +58,7 @@ class LTNConstraintLoss(nn.Module):
         self.bound_b = float(bound_b)
         self.bound_weight = float(bound_weight)
         self.hierarchy_weight = float(hierarchy_weight)
-        self.gullibility_weight = float(gullibility_weight)
-        self.ignorance_weight = float(ignorance_weight)
+        self.decisiveness_weight = float(decisiveness_weight)
         self.eps = float(eps)
 
     def _compute_xor(self, truth: torch.Tensor) -> torch.Tensor:
@@ -228,22 +224,19 @@ class LTNConstraintLoss(nn.Module):
 
         Args:
             outputs: Model outputs containing `choice_pos`, `choice_neg`, `truth`,
-                and optionally `knowledge` and `logits`.
+                and optionally `logits`.
             task_scalars: Optional tensor indicating task category/mode.
             active_mask: Optional boolean tensor for valid criteria masking.
             group_ids: Optional grouping tensor for unrolled independent evaluation.
             hierarchy_edges: Optional list of (child_idx, parent_idx) index tuples.
 
         Returns:
-            Scalar tensor loss combining epistemic regularization and task constraints.
+            Scalar tensor loss combining decisiveness penalty and task constraints.
         """
         choice_pos = outputs["choice_pos"]
         choice_neg = outputs["choice_neg"]
         truth = outputs["truth"]
         logits = outputs.get("logits")
-
-        knowledge = outputs.get("knowledge", choice_pos * choice_neg)
-        ignorance = (1.0 - choice_pos) * (1.0 - choice_neg)
 
         # Check hierarchy edges in arguments or outputs dictionary
         h_edges = hierarchy_edges
@@ -255,9 +248,9 @@ class LTNConstraintLoss(nn.Module):
 
         # Grouped candidate evaluation path
         if group_ids is not None:
-            gullibility_penalty = knowledge.mean() * self.gullibility_weight
-            ignorance_penalty = ignorance.mean() * self.ignorance_weight
-            epistemic_loss = gullibility_penalty + ignorance_penalty
+            decisiveness_penalty = (
+                choice_pos * (1.0 - choice_pos) + choice_neg * (1.0 - choice_neg)
+            ).mean() * self.decisiveness_weight
 
             task_loss = torch.tensor(0.0, device=choice_pos.device, dtype=choice_pos.dtype)
             if task_scalars is not None:
@@ -267,7 +260,7 @@ class LTNConstraintLoss(nn.Module):
                     group_ids=group_ids,
                     task_scalars=task_scalars,
                 )
-            return epistemic_loss + task_loss + imp_loss
+            return decisiveness_penalty + task_loss + imp_loss
 
         # Legacy fixed-dimension evaluation path
         if active_mask is None:
@@ -276,12 +269,14 @@ class LTNConstraintLoss(nn.Module):
         mask_f = active_mask.float() if active_mask is not None else None
         if mask_f is not None:
             denom = mask_f.sum().clamp(min=1.0)
-            gullibility_penalty = ((knowledge * mask_f).sum() / denom) * self.gullibility_weight
-            ignorance_penalty = ((ignorance * mask_f).sum() / denom) * self.ignorance_weight
+            decisiveness_terms = choice_pos * (1.0 - choice_pos) + choice_neg * (1.0 - choice_neg)
+            decisiveness_penalty = (
+                (decisiveness_terms * mask_f).sum() / denom
+            ) * self.decisiveness_weight
         else:
-            gullibility_penalty = knowledge.mean() * self.gullibility_weight
-            ignorance_penalty = ignorance.mean() * self.ignorance_weight
-        epistemic_loss = gullibility_penalty + ignorance_penalty
+            decisiveness_penalty = (
+                choice_pos * (1.0 - choice_pos) + choice_neg * (1.0 - choice_neg)
+            ).mean() * self.decisiveness_weight
 
         task_loss = torch.tensor(0.0, device=choice_pos.device, dtype=choice_pos.dtype)
         if task_scalars is not None:
@@ -292,4 +287,4 @@ class LTNConstraintLoss(nn.Module):
                 active_mask=active_mask,
             )
 
-        return epistemic_loss + task_loss + imp_loss
+        return decisiveness_penalty + task_loss + imp_loss
