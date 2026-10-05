@@ -11,7 +11,7 @@ import optuna
 from loguru import logger
 
 
-def objective(trial: optuna.Trial) -> float:
+def objective(trial: optuna.Trial, args) -> float:
     """Optuna objective function evaluating YodaDecisionEngine configurations.
 
     Args:
@@ -93,15 +93,21 @@ def objective(trial: optuna.Trial) -> float:
         str(belnap_weight),
         "--margin-weight",
         str(margin_weight),
-        "--checkpoint-dir",
-        str(trial_dir),
-        "--output-model",
-        str(trial_dir / "model.pt"),
-        "--epochs",
-        "10",
-        "--batch-size",
-        "64",
     ]
+    if args.train_path:
+        cmd.extend(["--train-path", args.train_path])
+    cmd.extend(
+        [
+            "--checkpoint-dir",
+            str(trial_dir),
+            "--output-model",
+            str(trial_dir / "model.pt"),
+            "--epochs",
+            "10",
+            "--batch-size",
+            "64",
+        ]
+    )
 
     logger.info(
         "Starting Trial #{} with backbone={} lr={:.2e} backbone_lr={:.2e} blocks={}",
@@ -173,6 +179,12 @@ def main() -> None:
         help="Number of trials to run in parallel (default: 4)",
     )
     parser.add_argument(
+        "--train-path",
+        type=str,
+        default=None,
+        help="Path to the primary dataset",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -232,7 +244,7 @@ def main() -> None:
     logger.info("Initialized study '{}' with seed={} and storage={}", study_name, seed, storage)
     logger.info("Wrote study metadata to {}", metadata_path)
 
-    study.optimize(objective, n_trials=args.n_trials, n_jobs=args.n_jobs)
+    study.optimize(lambda t: objective(t, args), n_trials=args.n_trials, n_jobs=args.n_jobs)
 
     try:
         logger.info("Optuna study completed.")
