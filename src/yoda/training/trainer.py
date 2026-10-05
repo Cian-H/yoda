@@ -80,7 +80,7 @@ class YodaTrainer:
         t0_epochs: int = 2,
         t_mult: int = 2,
         lr_decay: float = 0.75,
-        belnap_weight: float = 0.1,
+        belnap_weight: float = 1.0,
         ltn_weight: float = 0.1,
         assertion_weight: float = 0.0,
         focal_gamma: float = 2.0,
@@ -104,7 +104,8 @@ class YodaTrainer:
             t0_epochs: Number of epochs for initial cosine cycle length T_0.
             t_mult: Cycle lengthening factor for cosine annealing warm restarts.
             lr_decay: Decay factor for base learning rate upon restart.
-            belnap_weight: Weight coefficient lambda for FuzzyBelnapLoss regularization.
+            belnap_weight: Weight coefficient lambda for FuzzyBelnapLoss regularization
+                (default: 1.0).
             ltn_weight: Weight coefficient for LTNConstraintLoss regularization.
             assertion_weight: Weight coefficient for assertion loss regularization.
             focal_gamma: Focusing exponent for FocalLoss.
@@ -222,8 +223,8 @@ class YodaTrainer:
         )
         logits = out["logits"]
 
-        # Base classification loss: Grouped Focal-Margin hybrid
-        base_cls_loss, loss_parts = self.focal_margin_loss_fn(logits, labels, group_ids=group_ids)
+        # Base classification loss: focal_loss logged, margin_loss drives total_loss
+        _, loss_parts = self.focal_margin_loss_fn(logits, labels, group_ids=group_ids)
         focal_loss = loss_parts["focal_loss"]
         margin_loss = loss_parts["margin_loss"]
 
@@ -244,14 +245,9 @@ class YodaTrainer:
             assertion_loss = torch.tensor(0.0, device=self.device)
 
         # Belnap semantic regularization
-        if self.belnap_weight > 0.0:
-            target_evidence = BelnapEvidence(t=labels, f=1.0 - labels)
-            pred_evidence = BelnapEvidence(t=out["choice_pos"], f=out["choice_neg"])
-            belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
-            base_loss = base_cls_loss + self.belnap_weight * belnap_loss
-        else:
-            belnap_loss = torch.tensor(0.0, device=self.device)
-            base_loss = base_cls_loss
+        target_evidence = BelnapEvidence(t=labels, f=1.0 - labels)
+        pred_evidence = BelnapEvidence(t=out["choice_pos"], f=out["choice_neg"])
+        belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
 
         # Grouped LTN constraint loss
         if self.current_ltn_w > 0.0:
@@ -262,12 +258,15 @@ class YodaTrainer:
                 group_ids=group_ids,
                 hierarchy_edges=hierarchy_edges,
             )
-            total_loss = base_loss * (1.0 + self.current_ltn_w * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)
-            total_loss = base_loss
 
-        total_loss = total_loss + self.current_assertion_w * assertion_loss
+        total_loss = (
+            (belnap_loss * self.belnap_weight)
+            + (margin_loss * self.margin_weight)
+            + (ltn_loss * self.current_ltn_w)
+            + (assertion_loss * self.current_assertion_w)
+        )
 
         correct_count = 0
         for gid in unique_groups:
@@ -329,7 +328,7 @@ class YodaTrainer:
         logits = out["logits"]
         batch_size, num_choices = logits.shape
 
-        base_cls_loss, loss_parts = self.focal_margin_loss_fn(
+        _, loss_parts = self.focal_margin_loss_fn(
             logits, target_indices, active_mask=active_mask
         )
         focal_loss = loss_parts["focal_loss"]
@@ -342,35 +341,30 @@ class YodaTrainer:
         incorrect_mask = (preds != labels).float()
         assertion_loss = (incorrect_mask * max_probs).mean()
 
-        if self.belnap_weight > 0.0:
-            target_t = torch.zeros(
-                (batch_size, num_choices), device=self.device, dtype=torch.float32
-            )
-            target_f = torch.ones(
-                (batch_size, num_choices), device=self.device, dtype=torch.float32
-            )
+        target_t = torch.zeros(
+            (batch_size, num_choices), device=self.device, dtype=torch.float32
+        )
+        target_f = torch.ones(
+            (batch_size, num_choices), device=self.device, dtype=torch.float32
+        )
 
-            target_t.scatter_(1, target_indices.unsqueeze(1), 1.0)
-            target_f.scatter_(1, target_indices.unsqueeze(1), 0.0)
+        target_t.scatter_(1, target_indices.unsqueeze(1), 1.0)
+        target_f.scatter_(1, target_indices.unsqueeze(1), 0.0)
 
-            for b_idx in range(batch_size):
-                for c_idx, c_str in enumerate(constraints[b_idx]):
-                    if c_idx != target_indices[b_idx].item() and c_str.startswith("none:"):
-                        target_f[b_idx, c_idx] = 0.0
+        for b_idx in range(batch_size):
+            for c_idx, c_str in enumerate(constraints[b_idx]):
+                if c_idx != target_indices[b_idx].item() and c_str.startswith("none:"):
+                    target_f[b_idx, c_idx] = 0.0
 
-            target_evidence = BelnapEvidence(t=target_t, f=target_f)
+        target_evidence = BelnapEvidence(t=target_t, f=target_f)
 
-            if "choice_pos" in out and "choice_neg" in out:
-                pred_evidence = BelnapEvidence(t=out["choice_pos"], f=out["choice_neg"])
-            else:
-                choice_state = BelnapState.from_tk(out["truth"], out["knowledge"])
-                pred_evidence = BelnapEvidence(t=choice_state.e_pos, f=choice_state.e_neg)
-
-            belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
-            base_loss = base_cls_loss + self.belnap_weight * belnap_loss
+        if "choice_pos" in out and "choice_neg" in out:
+            pred_evidence = BelnapEvidence(t=out["choice_pos"], f=out["choice_neg"])
         else:
-            belnap_loss = torch.tensor(0.0, device=self.device)
-            base_loss = base_cls_loss
+            choice_state = BelnapState.from_tk(out["truth"], out["knowledge"])
+            pred_evidence = BelnapEvidence(t=choice_state.e_pos, f=choice_state.e_neg)
+
+        belnap_loss = self.belnap_loss_fn(pred_evidence, target_evidence)
 
         if self.current_ltn_w > 0.0:
             hierarchy_edges = batch.get("hierarchy_edges")
@@ -380,12 +374,15 @@ class YodaTrainer:
                 active_mask=active_mask,
                 hierarchy_edges=hierarchy_edges,
             )
-            total_loss = base_loss * (1.0 + self.current_ltn_w * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)
-            total_loss = base_loss
 
-        total_loss = total_loss + self.current_assertion_w * assertion_loss
+        total_loss = (
+            (belnap_loss * self.belnap_weight)
+            + (margin_loss * self.margin_weight)
+            + (ltn_loss * self.current_ltn_w)
+            + (assertion_loss * self.current_assertion_w)
+        )
 
         preds = out["choice"] if "choice" in out else torch.argmax(logits, dim=-1)
         correct = (preds == target_indices).sum().item()

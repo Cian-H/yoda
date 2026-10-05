@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="models/checkpoints",
         help="Directory to save per-epoch model checkpoints and history.json",
     )
-    parser.add_argument("--belnap-weight", type=float, default=0.1)
+    parser.add_argument("--belnap-weight", type=float, default=1.0)
     parser.add_argument(
         "--ltn-weight",
         type=float,

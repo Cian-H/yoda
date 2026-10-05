@@ -209,22 +209,19 @@ def test_hierarchical_implication_constraint() -> None:
     assert truth.grad[3] == 0.0
 
 
-def test_ltn_init_epistemic_weights() -> None:
-    """Verifies default and custom epistemic regularization weights."""
+def test_ltn_init_decisiveness_weight() -> None:
+    """Verifies default and custom decisiveness regularization weight."""
     criterion = LTNConstraintLoss()
-    assert hasattr(criterion, "gullibility_weight")
-    assert criterion.gullibility_weight == 0.1
-    assert hasattr(criterion, "ignorance_weight")
-    assert criterion.ignorance_weight == 0.1
+    assert hasattr(criterion, "decisiveness_weight")
+    assert criterion.decisiveness_weight == 0.1
 
-    custom_criterion = LTNConstraintLoss(gullibility_weight=0.25, ignorance_weight=0.35)
-    assert custom_criterion.gullibility_weight == 0.25
-    assert custom_criterion.ignorance_weight == 0.35
+    custom_criterion = LTNConstraintLoss(decisiveness_weight=0.25)
+    assert custom_criterion.decisiveness_weight == 0.25
 
 
 def test_no_universal_bivalence_penalty() -> None:
-    """Verifies non-bivalent states incur zero penalty when epistemic weights are 0."""
-    criterion = LTNConstraintLoss(gullibility_weight=0.0, ignorance_weight=0.0)
+    """Verifies non-bivalent states incur zero penalty when decisiveness weight is 0."""
+    criterion = LTNConstraintLoss(decisiveness_weight=0.0)
 
     # Pure Ignorance: pos=0, neg=0 (Under old complementarity, this was heavily penalized)
     outputs_ignorance = {
@@ -245,39 +242,40 @@ def test_no_universal_bivalence_penalty() -> None:
     assert torch.isclose(loss_knowledge, torch.tensor(0.0))
 
 
-def test_epistemic_gullibility_penalty() -> None:
-    """Verifies gullibility penalty scales with knowledge."""
-    criterion = LTNConstraintLoss(gullibility_weight=0.2, ignorance_weight=0.0)
+def test_decisiveness_penalty() -> None:
+    """Verifies decisiveness penalty penalizes fence-sitting at 0.5 and rewards 0.0 / 1.0."""
+    criterion = LTNConstraintLoss(decisiveness_weight=0.2)
 
-    # pos=1.0, neg=1.0 -> knowledge = 1.0, ignorance = 0.0
-    outputs = {
+    # Fence-sitting state: pos=0.5, neg=0.5 -> pos*(1-pos) = 0.25, neg*(1-neg) = 0.25
+    # Total per element = 0.5, mean = 0.5, loss = 0.5 * 0.2 = 0.1
+    outputs_fence = {
+        "choice_pos": torch.full((1, 4), 0.5),
+        "choice_neg": torch.full((1, 4), 0.5),
+        "truth": torch.full((1, 4), 0.5),
+    }
+    loss_fence = criterion(outputs_fence)
+    assert torch.isclose(loss_fence, torch.tensor(0.1))
+
+    # Decisive state: pos=1.0, neg=0.0 -> pos*(1-pos)=0.0, neg*(1-neg)=0.0 -> penalty = 0.0
+    outputs_decisive = {
         "choice_pos": torch.ones((1, 4)),
-        "choice_neg": torch.ones((1, 4)),
-        "truth": torch.full((1, 4), 0.5),
-    }
-    loss = criterion(outputs)
-    assert torch.isclose(loss, torch.tensor(0.2))
-
-    # Explicit knowledge in outputs dictionary
-    outputs_explicit = {
-        "choice_pos": torch.zeros((1, 2)),
-        "choice_neg": torch.zeros((1, 2)),
-        "truth": torch.zeros((1, 2)),
-        "knowledge": torch.tensor([[0.5, 0.5]]),
-    }
-    loss_explicit = criterion(outputs_explicit)
-    assert torch.isclose(loss_explicit, torch.tensor(0.1))
-
-
-def test_epistemic_ignorance_penalty() -> None:
-    """Verifies ignorance penalty scales with ignorance."""
-    criterion = LTNConstraintLoss(gullibility_weight=0.0, ignorance_weight=0.15)
-
-    # pos=0.0, neg=0.0 -> knowledge = 0.0, ignorance = 1.0
-    outputs = {
-        "choice_pos": torch.zeros((1, 4)),
         "choice_neg": torch.zeros((1, 4)),
-        "truth": torch.full((1, 4), 0.5),
+        "truth": torch.ones((1, 4)),
     }
-    loss = criterion(outputs)
-    assert torch.isclose(loss, torch.tensor(0.15))
+    loss_decisive = criterion(outputs_decisive)
+    assert torch.isclose(loss_decisive, torch.tensor(0.0))
+
+    # Gradient pushes away from 0.5:
+    pos = torch.tensor([0.4, 0.6], requires_grad=True)
+    neg = torch.tensor([0.4, 0.6], requires_grad=True)
+    outputs_grad = {
+        "choice_pos": pos,
+        "choice_neg": neg,
+        "truth": torch.tensor([0.5, 0.5]),
+    }
+    loss = criterion(outputs_grad)
+    loss.backward()
+    # At 0.4 (< 0.5): gradient is positive (pushes down towards 0)
+    assert pos.grad[0] > 0.0
+    # At 0.6 (> 0.5): gradient is negative (pushes up towards 1)
+    assert pos.grad[1] < 0.0
