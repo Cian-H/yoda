@@ -25,6 +25,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         source: str | None = "n4ze3m_synth",
         question_type: str | None = "choice",
         max_samples: int | None = None,
+        offset: int = 0,
         max_choices: int = 5,
         shuffle_choices: bool = False,
     ) -> None:
@@ -35,6 +36,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
             source: Dataset source filter (e.g. "n4ze3m_synth"), or None to disable.
             question_type: Task question type filter (e.g. "choice"), or None to disable.
             max_samples: Maximum number of matched samples to load.
+            offset: Number of initial matched samples to skip.
             max_choices: Standardized number of choice constraints per sample.
             shuffle_choices: Whether to randomly permute active candidate choices in __getitem__.
         """
@@ -43,6 +45,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
         self.source = source
         self.question_type = question_type
         self.max_samples = max_samples
+        self.offset = int(offset)
         self.max_choices = max_choices
         self.shuffle_choices = shuffle_choices
         self._samples: list[dict[str, Any]] = []
@@ -94,6 +97,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
             )
             return
 
+        matched_count = 0
         with self.file_path.open("r", encoding="utf-8") as f:
             for line in f:
                 line_str = line.strip()
@@ -147,6 +151,10 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
 
                 query = str(record.get("query", ""))
 
+                matched_count += 1
+                if matched_count <= self.offset:
+                    continue
+
                 self._samples.append(
                     {
                         "query": query,
@@ -191,7 +199,13 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
 
         constraints = shuffled_active + ["none: Unused option"] * (self.max_choices - num_active)
 
-        task_scalar_map = {"null": -1.0, "score": 0.0, "choice": 1.0}
+        task_scalar_map = {
+            "null": -1.0,
+            "score": 0.0,
+            "choice": 1.0,
+            "multi_choice": 0.5,
+            "multilabel": 0.5,
+        }
         task_scalar = task_scalar_map.get(question_type, -1.0)
 
         return {
@@ -251,7 +265,9 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
     cand_labels: list[float] = []
     cand_group_ids: list[int] = []
     cand_task_scalars: list[float] = []
+    hierarchy_edges: list[tuple[int, int]] = []
 
+    cand_offset = 0
     for b_idx, item in enumerate(batch):
         q = item["query"]
         s = item["state"]
@@ -271,7 +287,14 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
             cand_group_ids.append(b_idx)
             cand_task_scalars.append(task_sc)
 
-    return {
+        edges = item.get("hierarchy_edges")
+        if edges:
+            for c_edge, p_edge in edges:
+                hierarchy_edges.append((c_edge + cand_offset, p_edge + cand_offset))
+
+        cand_offset += len(active_c)
+
+    batch_dict: dict[str, Any] = {
         "queries": queries,
         "states": states,
         "constraints": constraints,
@@ -288,3 +311,6 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
             torch.tensor(cand_task_scalars, dtype=torch.float32).unsqueeze(-1)
         ),
     }
+    if hierarchy_edges:
+        batch_dict["hierarchy_edges"] = hierarchy_edges
+    return batch_dict

@@ -119,9 +119,7 @@ class YodaLightningAdapter(pl.LightningModule):
         )
         logits = out["logits"]
 
-        base_cls_loss, loss_parts = self.focal_margin_loss_fn(
-            logits, labels, group_ids=group_ids
-        )
+        base_cls_loss, loss_parts = self.focal_margin_loss_fn(logits, labels, group_ids=group_ids)
         focal_loss = loss_parts["focal_loss"]
         margin_loss = loss_parts["margin_loss"]
 
@@ -286,7 +284,6 @@ class YodaLightningAdapter(pl.LightningModule):
         if self.independent_eval and "candidates" in batch and "candidate_queries" in batch:
             return self._shared_independent_step(batch, stage)
         return self._shared_legacy_step(batch, stage)
-
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
         loss, _ = self._shared_step(batch, stage="train")

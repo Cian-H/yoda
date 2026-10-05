@@ -261,7 +261,6 @@ class YodaDecisionEngine(nn.Module):
         else:
             self.scalar_head = self.decision_head
 
-
         logger.debug(
             "architecture.yoda_decision_engine.init",
             extra={
@@ -311,7 +310,7 @@ class YodaDecisionEngine(nn.Module):
                 is_independent = True
         else:
             target_cand = []
-            is_independent = (self.num_choices == 1)
+            is_independent = self.num_choices == 1
 
         # 1. Encoding
         q_emb = self.text_encoder(queries)
@@ -463,4 +462,3 @@ class YodaDecisionEngine(nn.Module):
             }
 
         return final_out
-
