@@ -108,6 +108,10 @@ def objective(trial: optuna.Trial, args) -> float:
             "4",
             "--batch-size",
             "8",
+            "--precision",
+            "bfloat16",
+            "--early-stopping-patience",
+            "1",
         ]
     )
 

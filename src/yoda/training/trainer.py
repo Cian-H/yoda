@@ -94,6 +94,8 @@ class YodaTrainer:
         tensorboard_dir: str | Path | None = None,
         checkpoint_dir: str | Path | None = None,
         device: str | torch.device = "cpu",
+        precision: str = "float32",
+        early_stopping_patience: int | None = None,
     ) -> None:
         """Initializes YodaTrainer.
 
@@ -121,9 +123,22 @@ class YodaTrainer:
             tensorboard_dir: Directory to record TensorBoard event scalars.
             checkpoint_dir: Directory to save per-epoch checkpoints and history.json.
             device: Target execution device.
+            precision: Arithmetic precision mode ('float32', 'bfloat16', or 'float16').
+            early_stopping_patience: Number of epochs with no eval loss improvement before stopping.
         """
         self.device = torch.device(device) if isinstance(device, str) else device
+        self.precision = str(precision).lower()
+        if self.precision in ("bfloat16", "bf16"):
+            self.autocast_dtype: torch.dtype | None = torch.bfloat16
+        elif self.precision in ("float16", "fp16"):
+            self.autocast_dtype = torch.float16
+        else:
+            self.autocast_dtype = None
+
         self.model = model.to(self.device)
+        self.early_stopping_patience = (
+            int(early_stopping_patience) if early_stopping_patience is not None else None
+        )
         self.lr = float(lr)
         self.backbone_lr = float(backbone_lr) if backbone_lr is not None else self.lr
         self.min_lr = float(min_lr) if min_lr is not None else None
@@ -464,7 +479,11 @@ class YodaTrainer:
                 )
 
             self.optimizer.zero_grad()
-            loss, metrics = self._compute_loss_and_metrics(batch)
+            if self.autocast_dtype is not None and self.device.type == "cuda":
+                with torch.autocast(device_type="cuda", dtype=self.autocast_dtype):
+                    loss, metrics = self._compute_loss_and_metrics(batch)
+            else:
+                loss, metrics = self._compute_loss_and_metrics(batch)
 
             if torch.isnan(loss):
                 logger.warning("Loss is NaN; skipping batch")
@@ -582,7 +601,11 @@ class YodaTrainer:
 
         with torch.no_grad():
             for batch in dataloader:
-                _, metrics = self._compute_loss_and_metrics(batch)
+                if self.autocast_dtype is not None and self.device.type == "cuda":
+                    with torch.autocast(device_type="cuda", dtype=self.autocast_dtype):
+                        _, metrics = self._compute_loss_and_metrics(batch)
+                else:
+                    _, metrics = self._compute_loss_and_metrics(batch)
                 b_size = metrics["total"]
                 total_loss += metrics["loss"] * b_size
                 total_ce_loss += metrics["ce_loss"] * b_size
@@ -673,6 +696,7 @@ class YodaTrainer:
             )
 
         best_eval_loss = float("inf")
+        epochs_without_improvement = 0
         try:
             for epoch in range(1, epochs + 1):
                 train_metrics = self.train_epoch(train_loader)
@@ -789,9 +813,26 @@ class YodaTrainer:
                     with (self.checkpoint_dir / "history.json").open("w", encoding="utf-8") as f:
                         json.dump(history, f, indent=2)
 
-                    if eval_loader is not None and epoch_record["eval_loss"] < best_eval_loss:
+                # Checkpointing & Early Stopping
+                if eval_loader is not None:
+                    if epoch_record["eval_loss"] < best_eval_loss:
                         best_eval_loss = epoch_record["eval_loss"]
-                        torch.save(latest_payload, self.checkpoint_dir / "best_checkpoint.pt")
+                        epochs_without_improvement = 0
+                        if self.checkpoint_dir is not None:
+                            torch.save(latest_payload, self.checkpoint_dir / "best_checkpoint.pt")
+                    else:
+                        epochs_without_improvement += 1
+                        if (
+                            self.early_stopping_patience is not None
+                            and epochs_without_improvement >= self.early_stopping_patience
+                        ):
+                            logger.info(
+                                "Early stopping triggered after {} epochs without improvement "
+                                "(best eval loss: {:.4f})",
+                                epochs_without_improvement,
+                                best_eval_loss,
+                            )
+                            break
 
             if self.writer is not None:
                 self.writer.flush()
