@@ -164,6 +164,11 @@ class TestBelnapAttention:
         assert not torch.isnan(q_state.e_pos.grad).any()
         assert attn_layer.w_q_pos.weight.grad is not None
 
+    def test_attention_dropout_init(self) -> None:
+        """Verifies dropout parameter is stored and configured correctly."""
+        layer = BelnapAttention(d_model=32, n_heads=4, dropout=0.2)
+        assert layer.dropout.p == 0.2
+
 
 class TestBelnapFFN:
     """Verifies the Bilattice Feed-Forward Network with conflation."""
@@ -181,6 +186,30 @@ class TestBelnapFFN:
         assert out_state.e_pos.shape == (2, 4, 32)
         assert torch.all(out_state.e_pos >= 0.0) and torch.all(out_state.e_pos <= 1.0)
 
+    def test_ffn_dropout(self) -> None:
+        """Verifies dropout in BelnapFFN during training and evaluation modes."""
+        ffn = BelnapFFN(d_model=32, d_hidden=64, dropout=0.5)
+        assert ffn.dropout.p == 0.5
+
+        in_state = BelnapState(
+            e_pos=torch.rand(2, 4, 32),
+            e_neg=torch.rand(2, 4, 32),
+        )
+
+        ffn.eval()
+        eval_out1 = ffn(in_state)
+        eval_out2 = ffn(in_state)
+        assert torch.allclose(eval_out1.e_pos, eval_out2.e_pos)
+        assert torch.allclose(eval_out1.e_neg, eval_out2.e_neg)
+
+        ffn.train()
+        torch.manual_seed(123)
+        train_out1 = ffn(in_state)
+        torch.manual_seed(456)
+        train_out2 = ffn(in_state)
+        # With dropout=0.5 in train mode, different dropout masks produce different activations
+        assert not torch.allclose(train_out1.e_pos, train_out2.e_pos)
+
 
 class TestBelnapTransformerBlock:
     """Verifies the unified Belnap Transformer Block with residual joins."""
@@ -196,6 +225,14 @@ class TestBelnapTransformerBlock:
         assert isinstance(out, BelnapState)
         assert out.e_pos.shape == (2, 5, 32)
         assert torch.all(out.knowledge >= 0.0) and torch.all(out.knowledge <= 1.0)
+
+    def test_block_dropout_propagation(self) -> None:
+        """Verifies dropout parameter propagation to attention and FFN submodules."""
+        block = BelnapTransformerBlock(d_model=32, n_heads=4, dropout=0.25)
+        assert block.dropout == 0.25
+        assert block.self_attn.dropout.p == 0.25
+        assert block.cross_attn.dropout.p == 0.25
+        assert block.ffn.dropout.p == 0.25
 
     def test_residual_join_convex_combination(self) -> None:
         """Verifies that residual join uses convex combination to guarantee [0, 1] bounds
@@ -261,3 +298,15 @@ class TestBelnapDecisionTransformer:
         # Truth and knowledge coordinates must be strictly in [0, 1]
         assert torch.all(output["truth"] >= 0.0) and torch.all(output["truth"] <= 1.0)
         assert torch.all(output["knowledge"] >= 0.0) and torch.all(output["knowledge"] <= 1.0)
+
+    def test_decision_transformer_dropout(self) -> None:
+        """Verifies dropout parameter is propagated into stacked transformer blocks."""
+        model = BelnapDecisionTransformer(
+            d_model=32,
+            n_heads=4,
+            n_layers=2,
+            dropout=0.15,
+        )
+        for layer in model.layers:
+            assert isinstance(layer, BelnapTransformerBlock)
+            assert layer.dropout == 0.15

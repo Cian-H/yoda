@@ -77,6 +77,7 @@ class BelnapAttention(nn.Module):
         n_heads: int = 4,
         bias: bool = True,
         init_bias: float = 0.0,
+        dropout: float = 0.0,
     ) -> None:
         """Initializes BelnapAttention.
 
@@ -85,6 +86,7 @@ class BelnapAttention(nn.Module):
             n_heads: Number of attention heads.
             bias: Whether linear projection layers include bias.
             init_bias: Initial bias for output evidence projections. Defaults to 0.0.
+            dropout: Dropout probability. Defaults to 0.0.
         """
         super().__init__()
         if d_model % n_heads != 0:
@@ -94,6 +96,7 @@ class BelnapAttention(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_k = d_model // n_heads
+        self.dropout = nn.Dropout(dropout)
 
         # Dual evidence projections
         self.w_q_pos = nn.Linear(d_model, d_model, bias=bias)
@@ -210,6 +213,7 @@ class BelnapFFN(nn.Module):
         d_model: int,
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
+        dropout: float = 0.0,
     ) -> None:
         """Initializes BelnapFFN.
 
@@ -217,12 +221,14 @@ class BelnapFFN(nn.Module):
             d_model: Dimensionality of evidence representation.
             d_hidden: Hidden layer expansion dimensionality. Defaults to `4 * d_model`.
             conflation_weight: Weight lambda for contradictory evidence pruning.
+            dropout: Dropout probability. Defaults to 0.0.
         """
         super().__init__()
         if d_hidden is None:
             d_hidden = 4 * d_model
 
         self.conflation_weight = conflation_weight
+        self.dropout = nn.Dropout(dropout)
         self.w_1 = nn.Linear(d_model, d_hidden)
         self.w_2 = nn.Linear(d_model, d_hidden)
         self.w_o1 = nn.Linear(d_hidden, d_model)
@@ -235,6 +241,7 @@ class BelnapFFN(nn.Module):
 
         # 2. Hidden expansion with smooth Mish activation
         h_mid = nn.functional.mish(self.w_1(x_res.e_pos) + self.w_2(x_res.e_neg))
+        h_mid = self.dropout(h_mid)
 
         # 3. Output projections bounded in [0, 1]
         e_ffn_pos = torch.sigmoid(self.w_o1(h_mid))
@@ -253,6 +260,7 @@ class BelnapTransformerBlock(nn.Module):
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
         residual_weight: float = 0.5,
+        dropout: float = 0.0,
     ) -> None:
         """Initializes BelnapTransformerBlock.
 
@@ -262,16 +270,19 @@ class BelnapTransformerBlock(nn.Module):
             d_hidden: Hidden dimensionality of FFN.
             conflation_weight: Weight lambda for evidence conflation.
             residual_weight: Interpolation weight alpha for convex combination residual join.
+            dropout: Dropout probability. Defaults to 0.0.
         """
         super().__init__()
         self.d_model = d_model
         self.residual_weight = residual_weight
-        self.self_attn = BelnapAttention(d_model=d_model, n_heads=n_heads)
-        self.cross_attn = BelnapAttention(d_model=d_model, n_heads=n_heads)
+        self.dropout = dropout
+        self.self_attn = BelnapAttention(d_model=d_model, n_heads=n_heads, dropout=dropout)
+        self.cross_attn = BelnapAttention(d_model=d_model, n_heads=n_heads, dropout=dropout)
         self.ffn = BelnapFFN(
             d_model=d_model,
             d_hidden=d_hidden,
             conflation_weight=conflation_weight,
+            dropout=dropout,
         )
 
     @staticmethod
@@ -321,6 +332,7 @@ class BelnapDecisionTransformer(nn.Module):
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
         residual_weight: float = 0.5,
+        dropout: float = 0.0,
     ) -> None:
         """Initializes BelnapDecisionTransformer.
 
@@ -332,6 +344,7 @@ class BelnapDecisionTransformer(nn.Module):
             d_hidden: FFN hidden dimension.
             conflation_weight: Weight for bilattice evidence conflation.
             residual_weight: Interpolation weight alpha for convex combination residual joins.
+            dropout: Dropout probability. Defaults to 0.0.
         """
         super().__init__()
         self.d_model = d_model
@@ -353,6 +366,7 @@ class BelnapDecisionTransformer(nn.Module):
                     d_hidden=d_hidden,
                     conflation_weight=conflation_weight,
                     residual_weight=residual_weight,
+                    dropout=dropout,
                 )
                 for _ in range(n_layers)
             ]

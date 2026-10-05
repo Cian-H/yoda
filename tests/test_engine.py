@@ -83,6 +83,13 @@ class TestYodaDecisionEngine:
         engine = YodaDecisionEngine()
         assert engine.embed_dim == 256
         assert engine.num_choices == 5
+        assert engine.num_reasoning_blocks == 1
+        assert engine.conflation_weight == 0.1
+        assert engine.d_hidden_multiplier == 2.0
+        assert engine.dropout == 0.0
+        assert len(engine.reasoning_layers) == 1
+        assert engine.context_reasoning is engine.reasoning_layers[0]["context"]
+        assert engine.constraint_reasoning is engine.reasoning_layers[0]["constraint"]
         assert isinstance(engine.decision_head, BelnapDecisionHead)
 
     def test_forward_pass_shapes(self, dummy_engine: YodaDecisionEngine) -> None:
@@ -329,6 +336,115 @@ class TestYodaDecisionEngine:
             assert engine.context_reasoning.d_model == 384
             assert engine.constraint_reasoning.d_model == 384
             assert engine.decision_head.d_model == 384
+
+    def test_parameterized_topology_initialization(self) -> None:
+        """Verifies custom topology parameters and reasoning block construction."""
+        engine = YodaDecisionEngine(
+            embed_dim=64,
+            num_reasoning_blocks=3,
+            conflation_weight=0.25,
+            d_hidden_multiplier=3.0,
+            residual_weight=0.6,
+            dropout=0.1,
+        )
+        assert engine.num_reasoning_blocks == 3
+        assert engine.conflation_weight == 0.25
+        assert engine.d_hidden_multiplier == 3.0
+        assert engine.residual_weight == 0.6
+        assert engine.dropout == 0.1
+        assert len(engine.reasoning_layers) == 3
+
+        for layer in engine.reasoning_layers:
+            ctx_block = layer["context"]
+            assert ctx_block.d_model == 64
+            assert ctx_block.residual_weight == 0.6
+            assert ctx_block.dropout == 0.1
+            assert ctx_block.ffn.w_1.out_features == int(64 * 3.0)
+            assert ctx_block.ffn.conflation_weight == 0.25
+            assert ctx_block.ffn.dropout.p == 0.1
+
+            const_block = layer["constraint"]
+            assert const_block.d_model == 64
+            assert const_block.residual_weight == 0.6
+            assert const_block.dropout == 0.1
+            assert const_block.ffn.w_1.out_features == int(64 * 3.0)
+            assert const_block.ffn.conflation_weight == 0.25
+            assert const_block.ffn.dropout.p == 0.1
+
+    def test_multi_block_reasoning_gradient_flow(self) -> None:
+        """Verifies backpropagation through multiple cascaded reasoning blocks."""
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=64,
+            num_q_probes=4,
+            num_c_probes=8,
+            num_k_probes=4,
+            num_choices=5,
+            num_reasoning_blocks=2,
+            dropout=0.0,
+        )
+        queries = ["query 1", "query 2"]
+        states = [{"key": "val1"}, {"key": "val2"}]
+        constraints = [["c1", "c2"], ["c3", "c4"]]
+
+        out = engine(queries=queries, states=states, constraints=constraints)
+        loss = out["logits"].sum()
+        loss.backward()
+
+        for idx, layer in enumerate(engine.reasoning_layers):
+            ctx_block = layer["context"]
+            const_block = layer["constraint"]
+            assert ctx_block.cross_attn.w_q_pos.weight.grad is not None, (
+                f"Block {idx} ctx grad missing"
+            )
+            assert const_block.cross_attn.w_q_pos.weight.grad is not None, (
+                f"Block {idx} const grad missing"
+            )
+            assert not torch.isnan(ctx_block.cross_attn.w_q_pos.weight.grad).any()
+            assert not torch.isnan(const_block.cross_attn.w_q_pos.weight.grad).any()
+
+    def test_multi_block_diagnostics(self) -> None:
+        """Verifies diagnostic trajectories and attribution conservation with multi-blocks."""
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=64,
+            num_q_probes=4,
+            num_c_probes=8,
+            num_k_probes=4,
+            num_choices=5,
+            num_reasoning_blocks=2,
+        )
+        queries = ["query 1", "query 2"]
+        states = [{"key": "val1"}, {"key": "val2"}]
+        constraints = [["c1", "c2"], ["c3", "c4"]]
+
+        out = engine(
+            queries=queries,
+            states=states,
+            constraints=constraints,
+            return_diagnostics=True,
+        )
+        assert "diagnostics" in out
+        diag = out["diagnostics"]
+
+        expected_stages = [
+            "post_pooling",
+            "post_context_0",
+            "post_constraint_0",
+            "post_context_1",
+            "post_constraint_1",
+        ]
+        assert diag["stage_names"] == expected_stages
+
+        stage_logits = diag["stage_logits"]
+        attributions = diag["attributions"]
+        assert stage_logits.shape == (5, 2, 5)
+        assert attributions.shape == (5, 2, 5)
+
+        # Final stage matches output logits
+        assert torch.allclose(stage_logits[-1], out["logits"])
+        # Sum of attributions telescopes exactly to final logits
+        assert torch.allclose(attributions.sum(dim=0), out["logits"])
 
 
 def test_architecture_package_exports() -> None:

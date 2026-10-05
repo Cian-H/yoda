@@ -159,7 +159,11 @@ class YodaDecisionEngine(nn.Module):
         num_k_probes: int = 8,
         num_choices: int = 5,
         n_heads: int = 4,
+        num_reasoning_blocks: int = 1,
+        conflation_weight: float = 0.1,
+        d_hidden_multiplier: float = 2.0,
         residual_weight: float = 0.5,
+        dropout: float = 0.0,
         use_candidate_affinity: bool = False,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
@@ -174,7 +178,11 @@ class YodaDecisionEngine(nn.Module):
             num_k_probes: Number of constraint epistemic probe tokens for Belnap MPA.
             num_choices: Number of decision choices.
             n_heads: Number of attention heads for Belnap attention and transformer blocks.
+            num_reasoning_blocks: Number of cascaded reasoning transformer blocks.
+            conflation_weight: Weight lambda for contradictory evidence pruning.
+            d_hidden_multiplier: Multiplier for FFN hidden dimensionality.
             residual_weight: Interpolation weight alpha for convex combination residual joins.
+            dropout: Dropout probability for reasoning transformer blocks and FFN.
             use_candidate_affinity: If True, uses dynamic bilateral candidate affinity scoring.
             device: Target execution device.
             dtype: Target execution data type.
@@ -186,7 +194,11 @@ class YodaDecisionEngine(nn.Module):
         self.num_k_probes = num_k_probes
         self.num_choices = num_choices
         self.n_heads = n_heads
+        self.num_reasoning_blocks = num_reasoning_blocks
+        self.conflation_weight = conflation_weight
+        self.d_hidden_multiplier = d_hidden_multiplier
         self.residual_weight = residual_weight
+        self.dropout = dropout
         self.use_candidate_affinity = use_candidate_affinity
 
         # Phase 1: Encoders
@@ -233,16 +245,27 @@ class YodaDecisionEngine(nn.Module):
         )
 
         # Phase 3: Reasoning Core (Cascaded Cross-Attention)
-        self.context_reasoning = BelnapTransformerBlock(
-            d_model=effective_dim,
-            n_heads=n_heads,
-            residual_weight=residual_weight,
-        )
-        self.constraint_reasoning = BelnapTransformerBlock(
-            d_model=effective_dim,
-            n_heads=n_heads,
-            residual_weight=residual_weight,
-        )
+        self.reasoning_layers = nn.ModuleList([
+            nn.ModuleDict({
+                "context": BelnapTransformerBlock(
+                    d_model=effective_dim,
+                    n_heads=n_heads,
+                    d_hidden=int(effective_dim * d_hidden_multiplier),
+                    conflation_weight=conflation_weight,
+                    residual_weight=residual_weight,
+                    dropout=dropout,
+                ),
+                "constraint": BelnapTransformerBlock(
+                    d_model=effective_dim,
+                    n_heads=n_heads,
+                    d_hidden=int(effective_dim * d_hidden_multiplier),
+                    conflation_weight=conflation_weight,
+                    residual_weight=residual_weight,
+                    dropout=dropout,
+                ),
+            })
+            for _ in range(num_reasoning_blocks)
+        ])
 
         # Phase 4: Judgment
         self.decision_head = BelnapDecisionHead(
@@ -271,8 +294,23 @@ class YodaDecisionEngine(nn.Module):
                 "num_k_probes": num_k_probes,
                 "num_choices": num_choices,
                 "n_heads": n_heads,
+                "num_reasoning_blocks": num_reasoning_blocks,
+                "conflation_weight": conflation_weight,
+                "d_hidden_multiplier": d_hidden_multiplier,
+                "residual_weight": residual_weight,
+                "dropout": dropout,
             },
         )
+
+    @property
+    def context_reasoning(self) -> BelnapTransformerBlock:
+        """First context reasoning block (for backward compatibility)."""
+        return self.reasoning_layers[0]["context"]  # type: ignore[return-value]
+
+    @property
+    def constraint_reasoning(self) -> BelnapTransformerBlock:
+        """First constraint reasoning block (for backward compatibility)."""
+        return self.reasoning_layers[0]["constraint"]  # type: ignore[return-value]
 
     def forward(
         self,
@@ -328,65 +366,65 @@ class YodaDecisionEngine(nn.Module):
         _, c_state = self.c_mpa(c_emb)
         _, k_state = self.k_mpa(k_emb)
 
-        # Stage 0: Post-Pooling
-        x_0 = q_state
+        # 3. Cascaded Cross-Attention Reasoning Core
+        stage_names = ["post_pooling"]
+        stage_states = [q_state]
 
-        # Stage 1: Post-Context
-        x_1 = self.context_reasoning(x=x_0, context=c_state)
+        curr_state = q_state
+        for idx, layer in enumerate(self.reasoning_layers):
+            context_block = layer["context"]
+            constraint_block = layer["constraint"]
+            curr_state = context_block(x=curr_state, context=c_state)
+            suffix = f"_{idx}" if len(self.reasoning_layers) > 1 else ""
+            stage_names.append(f"post_context{suffix}")
+            stage_states.append(curr_state)
 
-        # Stage 2: Post-Constraint (Final)
-        x_2 = self.constraint_reasoning(x=x_1, context=k_state)
+            curr_state = constraint_block(x=curr_state, context=k_state)
+            stage_names.append(f"post_constraint{suffix}")
+            stage_states.append(curr_state)
+
+        final_state = curr_state
 
         if is_independent:
             head = self.scalar_head if self.num_choices != 1 else self.decision_head
-            final_out = head(x_2)
+            final_out = head(final_state)
             if return_diagnostics:
-                probe_0 = head(x_0)
-                probe_1 = head(x_1)
+                probe_outs = [head(s) for s in stage_states]
+                stage_logits = torch.stack([p["logits"] for p in probe_outs], dim=0)
+                stage_knowledge = torch.stack([p["knowledge"] for p in probe_outs], dim=0)
+                stage_truth = torch.stack([p["truth"] for p in probe_outs], dim=0)
+
+                attributions_list = [stage_logits[0]]
+                for i in range(1, len(stage_states)):
+                    attributions_list.append(stage_logits[i] - stage_logits[i - 1])
+                attributions = torch.stack(attributions_list, dim=0)
+
                 final_out["diagnostics"] = {
-                    "stage_names": ["post_pooling", "post_context", "post_constraint"],
-                    "stage_logits": torch.stack(
-                        [probe_0["logits"], probe_1["logits"], final_out["logits"]], dim=0
-                    ),
-                    "stage_knowledge": torch.stack(
-                        [probe_0["knowledge"], probe_1["knowledge"], final_out["knowledge"]], dim=0
-                    ),
-                    "stage_truth": torch.stack(
-                        [probe_0["truth"], probe_1["truth"], final_out["truth"]], dim=0
-                    ),
-                    "attributions": torch.stack(
-                        [
-                            probe_0["logits"],
-                            probe_1["logits"] - probe_0["logits"],
-                            final_out["logits"] - probe_1["logits"],
-                        ],
-                        dim=0,
-                    ),
+                    "stage_names": stage_names,
+                    "stage_logits": stage_logits,
+                    "stage_knowledge": stage_knowledge,
+                    "stage_truth": stage_truth,
+                    "attributions": attributions,
                 }
             return final_out
 
         legacy_constraints: list[list[str]] = target_cand  # type: ignore[assignment]
         return self._legacy_forward(
-            x_0=x_0,
-            x_1=x_1,
-            x_2=x_2,
+            final_state=final_state,
             k_state=k_state,
             legacy_constraints=legacy_constraints,
             active_mask=active_mask,
             return_diagnostics=return_diagnostics,
+            stage_states=stage_states,
+            stage_names=stage_names,
         )
 
-    def _legacy_forward(
+    def _resolve_cand_states(
         self,
-        x_0: BelnapState,
-        x_1: BelnapState,
-        x_2: BelnapState,
-        k_state: BelnapState,
         legacy_constraints: list[list[str]],
-        active_mask: torch.Tensor | None,
-        return_diagnostics: bool,
-    ) -> dict[str, Any]:
-        """Executes legacy multi-choice judgment and active masking."""
+        k_state: BelnapState | None,
+    ) -> BelnapState | None:
+        """Resolves candidate states for choice affinity scoring."""
         if (
             self.use_candidate_affinity
             and len(legacy_constraints) > 0
@@ -394,71 +432,145 @@ class YodaDecisionEngine(nn.Module):
         ):
             cand_embs = self.constraint_encoder.encode_candidates(legacy_constraints)
             pos_raw, neg_raw = torch.sigmoid(self.cand_proj(cand_embs)).chunk(2, dim=-1)
-            cand_states = BelnapState(e_pos=pos_raw, e_neg=neg_raw)
-        else:
-            cand_states = k_state if k_state.e_pos.size(1) == self.num_choices else None
+            return BelnapState(e_pos=pos_raw, e_neg=neg_raw)
+        if k_state is not None and k_state.e_pos.size(1) == self.num_choices:
+            return k_state
+        return None
 
-        final_out = self.decision_head(x_2, candidate_states=cand_states)
-        device = final_out["logits"].device
+    def _resolve_active_mask(
+        self,
+        legacy_constraints: list[list[str]],
+        num_out_choices: int,
+        device: torch.device,
+        active_mask: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        """Constructs or formats the boolean mask for active candidate choices."""
+        if active_mask is not None:
+            return active_mask.to(device=device)
+        if not legacy_constraints:
+            return None
 
-        _batch_size, num_out_choices = final_out["logits"].shape
-        if active_mask is None and len(legacy_constraints) > 0:
-            mask_list: list[list[bool]] = []
-            for sample in legacy_constraints:
-                sample_len = len(sample)
-                row = []
-                for c_idx in range(num_out_choices):
-                    if c_idx < sample_len:
-                        c_str = str(sample[c_idx])
-                        row.append(not c_str.startswith("none:"))
-                    else:
-                        row.append(False)
-                mask_list.append(row)
-            active_mask = torch.tensor(mask_list, device=device, dtype=torch.bool)
-        elif active_mask is not None:
-            active_mask = active_mask.to(device=device)
+        mask_list: list[list[bool]] = []
+        for sample in legacy_constraints:
+            sample_len = len(sample)
+            row = [
+                (not str(sample[c_idx]).startswith("none:"))
+                if c_idx < sample_len
+                else False
+                for c_idx in range(num_out_choices)
+            ]
+            mask_list.append(row)
+        return torch.tensor(mask_list, device=device, dtype=torch.bool)
 
+    def _resolve_stage_states(
+        self,
+        target_state: BelnapState,
+        stage_states: list[BelnapState] | None,
+        stage_names: list[str] | None,
+        x_0: BelnapState | None,
+        x_1: BelnapState | None,
+        x_2: BelnapState | None,
+    ) -> tuple[list[BelnapState], list[str]]:
+        """Resolves intermediate stages and their human-readable labels."""
+        if stage_states is not None:
+            names = (
+                stage_names
+                if stage_names is not None
+                else ["post_pooling"] + [f"stage_{i}" for i in range(1, len(stage_states))]
+            )
+            return stage_states, names
+
+        if x_0 is not None and x_1 is not None and x_2 is not None:
+            return [x_0, x_1, x_2], ["post_pooling", "post_context", "post_constraint"]
+
+        return [target_state], ["post_constraint"]
+
+    def _build_stage_diagnostics(
+        self,
+        stage_states: list[BelnapState],
+        stage_names: list[str],
+        cand_states: BelnapState | None,
+        active_mask: torch.Tensor | None,
+    ) -> dict[str, Any]:
+        """Calculates stage attributions and intermediate probes for diagnostics."""
+        probe_outs = [
+            self.decision_head(s, candidate_states=cand_states)
+            for s in stage_states
+        ]
         if active_mask is not None and active_mask.numel() > 0:
-            final_out["logits"] = final_out["logits"].masked_fill(~active_mask, -1e9)
-            final_out["truth"] = final_out["truth"].masked_fill(~active_mask, 0.0)
-            final_out["knowledge"] = final_out["knowledge"].masked_fill(~active_mask, 0.0)
-            final_out["choice_pos"] = final_out["choice_pos"].masked_fill(~active_mask, 0.0)
-            final_out["choice_neg"] = final_out["choice_neg"].masked_fill(~active_mask, 0.0)
+            for probe in probe_outs:
+                probe["logits"] = probe["logits"].masked_fill(~active_mask, -1e9)
+                probe["truth"] = probe["truth"].masked_fill(~active_mask, 0.0)
+                probe["knowledge"] = probe["knowledge"].masked_fill(~active_mask, 0.0)
+
+        stage_logits = torch.stack([p["logits"] for p in probe_outs], dim=0)
+        stage_knowledge = torch.stack([p["knowledge"] for p in probe_outs], dim=0)
+        stage_truth = torch.stack([p["truth"] for p in probe_outs], dim=0)
+
+        attributions_list = [stage_logits[0]]
+        for i in range(1, len(stage_states)):
+            attributions_list.append(stage_logits[i] - stage_logits[i - 1])
+        attributions = torch.stack(attributions_list, dim=0)
+
+        return {
+            "stage_names": stage_names,
+            "stage_logits": stage_logits,
+            "stage_knowledge": stage_knowledge,
+            "stage_truth": stage_truth,
+            "attributions": attributions,
+        }
+
+    def _legacy_forward(
+        self,
+        final_state: BelnapState | None = None,
+        k_state: BelnapState | None = None,
+        legacy_constraints: list[list[str]] | None = None,
+        active_mask: torch.Tensor | None = None,
+        return_diagnostics: bool = False,
+        stage_states: list[BelnapState] | None = None,
+        stage_names: list[str] | None = None,
+        x_0: BelnapState | None = None,
+        x_1: BelnapState | None = None,
+        x_2: BelnapState | None = None,
+    ) -> dict[str, Any]:
+        """Executes legacy multi-choice judgment and active masking."""
+        target_state = final_state if final_state is not None else x_2
+        if target_state is None:
+            msg = "Either final_state or x_2 must be provided."
+            raise ValueError(msg)
+
+        resolved_stages, resolved_names = self._resolve_stage_states(
+            target_state=target_state,
+            stage_states=stage_states,
+            stage_names=stage_names,
+            x_0=x_0,
+            x_1=x_1,
+            x_2=x_2,
+        )
+
+        constraints = legacy_constraints or []
+        cand_states = self._resolve_cand_states(constraints, k_state)
+
+        final_out = self.decision_head(target_state, candidate_states=cand_states)
+        device = final_out["logits"].device
+        num_out_choices = final_out["logits"].shape[1]
+
+        mask = self._resolve_active_mask(constraints, num_out_choices, device, active_mask)
+        if mask is not None and mask.numel() > 0:
+            final_out["logits"] = final_out["logits"].masked_fill(~mask, -1e9)
+            final_out["truth"] = final_out["truth"].masked_fill(~mask, 0.0)
+            final_out["knowledge"] = final_out["knowledge"].masked_fill(~mask, 0.0)
+            final_out["choice_pos"] = final_out["choice_pos"].masked_fill(~mask, 0.0)
+            final_out["choice_neg"] = final_out["choice_neg"].masked_fill(~mask, 0.0)
             final_out["choice"] = torch.argmax(final_out["logits"], dim=-1)
-            final_out["active_mask"] = active_mask
+            final_out["active_mask"] = mask
 
         if return_diagnostics:
-            probe_0 = self.decision_head(x_0, candidate_states=cand_states)
-            probe_1 = self.decision_head(x_1, candidate_states=cand_states)
-
-            if active_mask is not None and active_mask.numel() > 0:
-                probe_0["logits"] = probe_0["logits"].masked_fill(~active_mask, -1e9)
-                probe_0["truth"] = probe_0["truth"].masked_fill(~active_mask, 0.0)
-                probe_0["knowledge"] = probe_0["knowledge"].masked_fill(~active_mask, 0.0)
-
-                probe_1["logits"] = probe_1["logits"].masked_fill(~active_mask, -1e9)
-                probe_1["truth"] = probe_1["truth"].masked_fill(~active_mask, 0.0)
-                probe_1["knowledge"] = probe_1["knowledge"].masked_fill(~active_mask, 0.0)
-
-            final_out["diagnostics"] = {
-                "stage_names": ["post_pooling", "post_context", "post_constraint"],
-                "stage_logits": torch.stack(
-                    [probe_0["logits"], probe_1["logits"], final_out["logits"]], dim=0
-                ),
-                "stage_knowledge": torch.stack(
-                    [probe_0["knowledge"], probe_1["knowledge"], final_out["knowledge"]], dim=0
-                ),
-                "stage_truth": torch.stack(
-                    [probe_0["truth"], probe_1["truth"], final_out["truth"]], dim=0
-                ),
-                "attributions": torch.stack(
-                    [
-                        probe_0["logits"],
-                        probe_1["logits"] - probe_0["logits"],
-                        final_out["logits"] - probe_1["logits"],
-                    ],
-                    dim=0,
-                ),
-            }
+            final_out["diagnostics"] = self._build_stage_diagnostics(
+                stage_states=resolved_stages,
+                stage_names=resolved_names,
+                cand_states=cand_states,
+                active_mask=mask,
+            )
 
         return final_out
