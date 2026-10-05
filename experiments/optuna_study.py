@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import secrets
 import subprocess
+import time
 from pathlib import Path
 
 import optuna
@@ -147,29 +149,69 @@ def main() -> None:
     parser.add_argument(
         "--n-trials",
         type=int,
-        default=250,
-        help="Number of Optuna optimization trials (default: 250)",
+        default=1000,
+        help="Number of Optuna optimization trials (default: 1000)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for Optuna sampler (default: randomly generated)",
     )
     parser.add_argument(
         "--study-name",
         type=str,
-        default="yoda_hpo_study",
-        help="Name of the Optuna study",
+        default=None,
+        help="Name of the Optuna study (default: auto-generated timestamped name)",
     )
     parser.add_argument(
         "--storage",
         type=str,
         default=None,
-        help="Optional database storage URL (e.g., sqlite:///optuna.db)",
+        help="Database storage URL (default: sqlite:///data/optuna.db)",
     )
     args = parser.parse_args()
 
+    if args.seed is not None:
+        seed = args.seed
+    else:
+        seed = secrets.randbits(32)
+        while seed == 42:
+            seed = secrets.randbits(32)
+
+    sampler = optuna.samplers.TPESampler(seed=seed)
+
+    Path("data").mkdir(exist_ok=True)
+    storage = "sqlite:///data/optuna.db"
+    if args.storage:
+        storage = args.storage
+    study_name = f"yoda_sweep_{int(time.time())}"
+    if args.study_name:
+        study_name = args.study_name
+
     study = optuna.create_study(
-        study_name=args.study_name,
+        study_name=study_name,
+        storage=storage,
+        sampler=sampler,
         direction="maximize",
-        storage=args.storage,
-        load_if_exists=bool(args.storage),
     )
+
+    metadata = {
+        "study_name": study_name,
+        "seed": seed,
+        "n_trials": args.n_trials,
+        "storage": storage,
+        "direction": "maximize",
+        "sampler": type(sampler).__name__,
+        "created_at": time.time(),
+    }
+    metadata_path = Path("data") / f"{study_name}_metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+    logger.info("Initialized study '{}' with seed={} and storage={}", study_name, seed, storage)
+    logger.info("Wrote study metadata to {}", metadata_path)
+
     study.optimize(objective, n_trials=args.n_trials)
 
     try:
