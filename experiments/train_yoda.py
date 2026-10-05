@@ -123,10 +123,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum learning rate for scheduler warmup/annealing floor (default: 1e-4)",
     )
     parser.add_argument(
-        "--pct-start",
+        "--t0-epochs",
+        type=int,
+        default=2,
+        help="Number of epochs for initial cosine cycle length T_0 (default: 2)",
+    )
+    parser.add_argument(
+        "--t-mult",
+        type=int,
+        default=2,
+        help="Cycle lengthening factor for cosine annealing warm restarts (default: 2)",
+    )
+    parser.add_argument(
+        "--lr-decay",
         type=float,
-        default=0.05,
-        help="Percentage of total training steps dedicated to warmup (default: 0.05 = 5%%)",
+        default=0.75,
+        help="Decay factor for base learning rate upon restart (default: 0.75)",
     )
     parser.add_argument(
         "--tensorboard-dir",
@@ -520,7 +532,9 @@ def main() -> None:
             model=model,
             lr=args.lr,
             min_lr=args.min_lr,
-            pct_start=args.pct_start,
+            t0_epochs=args.t0_epochs,
+            t_mult=args.t_mult,
+            lr_decay=args.lr_decay,
             belnap_weight=args.belnap_weight,
             ltn_weight=args.ltn_weight,
             assertion_weight=args.assertion_weight,

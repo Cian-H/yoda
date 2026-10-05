@@ -379,24 +379,57 @@ class TestYodaTrainer:
             assert "lr" in record
             assert record["lr"] > 0.0
 
-    def test_trainer_onecycle_scheduling_steps(
+    def test_trainer_cosine_annealing_warm_restarts_scheduling_steps(
         self,
         dummy_engine: YodaDecisionEngine,
         synthetic_loader: DataLoader[dict[str, Any]],
     ) -> None:
-        """Verifies OneCycleLR modifies learning rate per batch step."""
+        """Verifies CosineAnnealingWarmRestarts modifies learning rate per batch step."""
         trainer = YodaTrainer(
             model=dummy_engine,
             lr=1e-3,
+            min_lr=1e-4,
+            t0_epochs=2,
+            t_mult=2,
+            lr_decay=0.75,
             use_scheduler=True,
-            pct_start=0.3,
             device="cpu",
         )
         history = trainer.fit(train_loader=synthetic_loader, epochs=4)
         assert len(history) == 4
         # Scheduler should be active and stepped
         assert trainer.scheduler is not None
+        assert isinstance(
+            trainer.scheduler,
+            torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
+        )
+        assert trainer.scheduler.T_0 == 6
+        assert trainer.scheduler.T_mult == 2
+        assert trainer.scheduler.eta_min == 1e-4
         assert trainer.optimizer.param_groups[0]["lr"] != 1e-3
+
+    def test_trainer_cosine_warm_restarts_decaying_amplitude(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies lengthening cycles and decaying peak learning rate upon restarts."""
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            lr=1e-3,
+            min_lr=1e-4,
+            t0_epochs=1,
+            t_mult=2,
+            lr_decay=0.75,
+            use_scheduler=True,
+            device="cpu",
+        )
+        history = trainer.fit(train_loader=synthetic_loader, epochs=3)
+        assert len(history) == 3
+        assert trainer.scheduler is not None
+        assert pytest.approx(history[0]["lr"], rel=1e-4) == 7.5e-4
+        assert pytest.approx(trainer.scheduler.base_lrs[0], rel=1e-4) == 5.625e-4
+        assert pytest.approx(history[2]["lr"], rel=1e-4) == 5.625e-4
 
     def test_trainer_assertion_loss_telemetry(
         self,
@@ -693,4 +726,34 @@ def test_train_yoda_cli_dataset_splits() -> None:
     assert custom.val_ratio == 0.15
     assert custom.test_ratio == 0.15
     assert custom.max_train_samples == 3000
+
+
+def test_train_yoda_cli_cosine_scheduler_args() -> None:
+    """Verifies CLI parsing of --t0-epochs, --t-mult, and --lr-decay arguments."""
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args([])
+    assert default_args.t0_epochs == 2
+    assert default_args.t_mult == 2
+    assert default_args.lr_decay == 0.75
+
+    custom_args = parser.parse_args([
+        "--t0-epochs",
+        "3",
+        "--t-mult",
+        "4",
+        "--lr-decay",
+        "0.5",
+    ])
+    assert custom_args.t0_epochs == 3
+    assert custom_args.t_mult == 4
+    assert custom_args.lr_decay == 0.5
+
 

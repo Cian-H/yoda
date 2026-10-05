@@ -31,6 +31,9 @@ class YodaTrainer:
         optimizer: torch.optim.Optimizer | None = None,
         lr: float = 1e-3,
         min_lr: float | None = None,
+        t0_epochs: int = 2,
+        t_mult: int = 2,
+        lr_decay: float = 0.75,
         belnap_weight: float = 0.1,
         ltn_weight: float = 0.1,
         assertion_weight: float = 0.0,
@@ -52,14 +55,18 @@ class YodaTrainer:
             optimizer: Torch optimizer; defaults to AdamW with specified learning rate.
             lr: Learning rate if default AdamW optimizer is instantiated.
             min_lr: Minimum learning rate for scheduler warmup/annealing floor.
+            t0_epochs: Number of epochs for initial cosine cycle length T_0.
+            t_mult: Cycle lengthening factor for cosine annealing warm restarts.
+            lr_decay: Decay factor for base learning rate upon restart.
             belnap_weight: Weight coefficient lambda for FuzzyBelnapLoss regularization.
             ltn_weight: Weight coefficient for LTNConstraintLoss regularization.
             assertion_weight: Weight coefficient for assertion loss regularization.
             focal_gamma: Focusing exponent for FocalLoss.
             margin: Target separation margin for MarginLoss.
             margin_weight: Weight coefficient for MarginLoss term.
-            use_scheduler: Whether to automatically instantiate OneCycleLR during fit().
-            pct_start: Percentage of training cycle spent warming up learning rate.
+            use_scheduler: Whether to automatically instantiate
+                CosineAnnealingWarmRestarts during fit().
+            pct_start: Deprecated; kept for backward compatibility.
             scheduler: Optional pre-configured PyTorch learning rate scheduler.
             independent_eval: Whether to use independent choice assessment with grouped losses.
             tensorboard_dir: Directory to record TensorBoard event scalars.
@@ -70,6 +77,9 @@ class YodaTrainer:
         self.model = model.to(self.device)
         self.lr = float(lr)
         self.min_lr = float(min_lr) if min_lr is not None else None
+        self.t0_epochs = int(t0_epochs)
+        self.t_mult = int(t_mult)
+        self.lr_decay = float(lr_decay)
         self.belnap_weight = float(belnap_weight)
         self.ltn_weight = float(ltn_weight)
         self.assertion_weight = float(assertion_weight)
@@ -80,6 +90,7 @@ class YodaTrainer:
         self.pct_start = float(pct_start)
         self.scheduler = scheduler
         self.independent_eval = bool(independent_eval)
+        self._global_step: int = 0
 
         self.optimizer = (
             optimizer
@@ -110,10 +121,14 @@ class YodaTrainer:
 
         logger.debug(
             "YodaTrainer initialized on device={}, lr={}, min_lr={}, "
+            "t0_epochs={}, t_mult={}, lr_decay={}, "
             "belnap_w={}, ltn_w={}, assertion_w={}",
             self.device,
             self.lr,
             self.min_lr,
+            self.t0_epochs,
+            self.t_mult,
+            self.lr_decay,
             self.belnap_weight,
             self.ltn_weight,
             self.assertion_weight,
@@ -395,6 +410,15 @@ class YodaTrainer:
             self.optimizer.step()
             if self.scheduler is not None:
                 self.scheduler.step()
+                if self._global_step > 0 and getattr(self.scheduler, "T_cur", -1) == 0:
+                    self.scheduler.base_lrs = [
+                        base_lr * self.lr_decay for base_lr in self.scheduler.base_lrs
+                    ]
+                    for param_group, base_lr in zip(
+                        self.optimizer.param_groups, self.scheduler.base_lrs, strict=False
+                    ):
+                        param_group["lr"] = base_lr
+            self._global_step += 1
 
             b_size = metrics["total"]
             total_loss += metrics["loss"] * b_size
@@ -513,31 +537,22 @@ class YodaTrainer:
         history: list[dict[str, float]] = []
 
         if self.use_scheduler and self.scheduler is None and len(train_loader) > 0:
-            total_steps = len(train_loader) * epochs
-            if self.min_lr is not None and self.min_lr > 0.0 and self.min_lr < self.lr:
-                div_factor = self.lr / self.min_lr
-                final_div_factor = 1.0
-            else:
-                div_factor = 25.0
-                final_div_factor = 10000.0
-
-            self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            t_0 = max(1, len(train_loader) * max(1, self.t0_epochs))
+            eta_min = self.min_lr if self.min_lr is not None else 0.0
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 self.optimizer,
-                max_lr=self.lr,
-                total_steps=total_steps,
-                pct_start=self.pct_start,
-                div_factor=div_factor,
-                final_div_factor=final_div_factor,
+                T_0=t_0,
+                T_mult=self.t_mult,
+                eta_min=eta_min,
             )
+            self._global_step = 0
             logger.info(
-                "Initialized OneCycleLR: total_steps={}, max_lr={:.2e}, min_lr={}, "
-                "pct_start={:.2f}, div_factor={:.2f}, final_div_factor={:.2f}",
-                total_steps,
-                self.lr,
-                self.min_lr,
-                self.pct_start,
-                div_factor,
-                final_div_factor,
+                "Initialized CosineAnnealingWarmRestarts: T_0={}, T_mult={}, eta_min={}, "
+                "lr_decay={:.2f}",
+                t_0,
+                self.t_mult,
+                eta_min,
+                self.lr_decay,
             )
 
         best_eval_loss = float("inf")
@@ -644,6 +659,7 @@ class YodaTrainer:
                 if self.checkpoint_dir is not None:
                     latest_payload = {
                         "epoch": epoch,
+                        "global_step": self._global_step,
                         "model_state_dict": self.model.state_dict(),
                         "optimizer_state_dict": self.optimizer.state_dict(),
                         "scheduler_state_dict": self.scheduler.state_dict()
