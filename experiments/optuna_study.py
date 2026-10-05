@@ -175,7 +175,7 @@ def main() -> None:
     parser.add_argument(
         "--n-jobs",
         type=int,
-        default=4,
+        default=2,
         help="Number of trials to run in parallel (default: 4)",
     )
     parser.add_argument(
