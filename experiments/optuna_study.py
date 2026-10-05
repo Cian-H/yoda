@@ -167,6 +167,12 @@ def main() -> None:
         help="Number of Optuna optimization trials (default: 2500)",
     )
     parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=4,
+        help="Number of trials to run in parallel (default: 4)",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -226,7 +232,7 @@ def main() -> None:
     logger.info("Initialized study '{}' with seed={} and storage={}", study_name, seed, storage)
     logger.info("Wrote study metadata to {}", metadata_path)
 
-    study.optimize(objective, n_trials=args.n_trials)
+    study.optimize(objective, n_trials=args.n_trials, n_jobs=args.n_jobs)
 
     try:
         logger.info("Optuna study completed.")
