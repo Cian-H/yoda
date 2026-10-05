@@ -27,7 +27,7 @@ def objective(trial: optuna.Trial, args) -> float:
             "sentence-transformers/all-MiniLM-L6-v2",
             "BAAI/bge-large-en-v1.5",
             "intfloat/e5-large-v2",
-            "Alibaba-NLP/gte-large-en-v1.5",
+            "BAAI/bge-base-en-v1.5",
         ],
     )
 
