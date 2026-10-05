@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from yoda.architecture.engine import YodaDecisionEngine
 from yoda.training import (
+    CyclicalConstraintScheduler,
     YodaDecisionDataset,
     YodaTrainer,
     collate_decision_batch,
@@ -614,6 +615,82 @@ class TestYodaTrainer:
             logger.remove(handler_id)
             trainer.optimizer.zero_grad()
 
+    def test_trainer_cyclical_constraint_schedulers_fit(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies that YodaTrainer.fit initializes staggered constraint schedulers."""
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            ltn_weight=0.2,
+            assertion_weight=0.1,
+            t0_epochs=2,
+            t_mult=2,
+            use_scheduler=True,
+            device="cpu",
+        )
+        # Check property aliases
+        assert trainer.ltn_w == 0.2
+        assert trainer.assertion_w == 0.1
+        assert trainer.current_ltn_w == 0.2
+        assert trainer.current_assertion_w == 0.1
+
+        trainer.fit(train_loader=synthetic_loader, epochs=1)
+
+        assert hasattr(trainer, "ltn_scheduler")
+        assert hasattr(trainer, "assertion_scheduler")
+        assert trainer.ltn_scheduler.max_weight == 0.2
+        assert trainer.scheduler is not None
+        assert trainer.ltn_scheduler.t0_steps == trainer.scheduler.T_0
+        assert trainer.ltn_scheduler.start_step == 0
+
+        assert trainer.assertion_scheduler.max_weight == 0.1
+        assert trainer.assertion_scheduler.t0_steps == trainer.scheduler.T_0
+        assert trainer.assertion_scheduler.start_step == trainer.scheduler.T_0
+
+    def test_trainer_evaluate_strict_weights(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies evaluate sets current weights back to strict values."""
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            ltn_weight=0.3,
+            assertion_weight=0.15,
+            device="cpu",
+        )
+        # Simulate a dynamic weight state during training
+        trainer.current_ltn_w = 0.01
+        trainer.current_assertion_w = 0.02
+
+        trainer.evaluate(synthetic_loader)
+
+        assert trainer.current_ltn_w == 0.3
+        assert trainer.current_assertion_w == 0.15
+
+    def test_trainer_cyclical_weight_telemetry(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+        tmp_path: Path,
+    ) -> None:
+        """Verifies TensorBoard scalar logging of cyclical constraint weights."""
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            ltn_weight=0.2,
+            assertion_weight=0.1,
+            t0_epochs=1,
+            t_mult=2,
+            use_scheduler=True,
+            tensorboard_dir=tmp_path / "tb",
+            device="cpu",
+        )
+        trainer.fit(train_loader=synthetic_loader, epochs=2)
+        trainer.close()
+        assert (tmp_path / "tb").exists()
+
 
 class TestYodaLightningAdapterScheduler:
     """Verifies scheduler configuration in YodaLightningAdapter."""
@@ -658,12 +735,14 @@ def test_training_package_exports() -> None:
     """Verifies that YodaDecisionDataset, collate_decision_batch, and YodaTrainer are exported."""
     import yoda.training as training
 
+    assert hasattr(training, "CyclicalConstraintScheduler")
     assert hasattr(training, "YodaDecisionDataset")
     assert hasattr(training, "collate_decision_batch")
     assert hasattr(training, "YodaTrainer")
     assert hasattr(training, "FocalLoss")
     assert hasattr(training, "MarginLoss")
     assert hasattr(training, "FocalMarginLoss")
+    assert "CyclicalConstraintScheduler" in training.__all__
     assert "YodaDecisionDataset" in training.__all__
     assert "collate_decision_batch" in training.__all__
     assert "YodaTrainer" in training.__all__
@@ -755,5 +834,73 @@ def test_train_yoda_cli_cosine_scheduler_args() -> None:
     assert custom_args.t0_epochs == 3
     assert custom_args.t_mult == 4
     assert custom_args.lr_decay == 0.5
+
+
+def test_cyclical_constraint_scheduler_init() -> None:
+    """Verifies default and custom attribute assignment in CyclicalConstraintScheduler."""
+    sched = CyclicalConstraintScheduler(max_weight=0.5, t0_steps=100)
+    assert sched.max_weight == 0.5
+    assert sched.t0_steps == 100
+    assert sched.t_mult == 2
+    assert sched.start_step == 0
+
+    custom = CyclicalConstraintScheduler(
+        max_weight=0.25,
+        t0_steps=50,
+        t_mult=3,
+        start_step=25,
+    )
+    assert custom.max_weight == 0.25
+    assert custom.t0_steps == 50
+    assert custom.t_mult == 3
+    assert custom.start_step == 25
+
+
+def test_cyclical_constraint_scheduler_staggered_start() -> None:
+    """Verifies that weights remain 0.0 before start_step."""
+    sched = CyclicalConstraintScheduler(max_weight=1.0, t0_steps=10, start_step=10)
+    for step in range(10):
+        assert sched.get_weight(step) == 0.0
+    assert sched.get_weight(10) == 0.0
+    # Halfway through cycle 1 (step 15)
+    assert pytest.approx(sched.get_weight(15), rel=1e-5) == 0.5
+
+
+def test_cyclical_constraint_scheduler_warm_restarts() -> None:
+    """Verifies cosine oscillation and cycle lengthening across warm restarts."""
+    sched = CyclicalConstraintScheduler(max_weight=1.0, t0_steps=10, t_mult=2, start_step=0)
+
+    # Cycle 1: length 10 (steps 0..9)
+    assert sched.get_weight(0) == 0.0
+    assert pytest.approx(sched.get_weight(5), rel=1e-5) == 0.5
+    assert pytest.approx(sched.get_weight(9), rel=1e-3) == 0.9755
+
+    # Cycle 2 restart at step 10: length 20 (steps 10..29)
+    assert sched.get_weight(10) == 0.0
+    assert pytest.approx(sched.get_weight(20), rel=1e-5) == 0.5
+
+    # Cycle 3 restart at step 30: length 40 (steps 30..69)
+    assert sched.get_weight(30) == 0.0
+    assert pytest.approx(sched.get_weight(50), rel=1e-5) == 0.5
+
+    # Cycle 4 restart at step 70
+    assert sched.get_weight(70) == 0.0
+
+
+def test_cyclical_constraint_scheduler_constant_cycle_length() -> None:
+    """Verifies behavior when t_mult=1 produces periodic cycles of identical length."""
+    sched = CyclicalConstraintScheduler(max_weight=0.8, t0_steps=6, t_mult=1, start_step=0)
+    assert sched.get_weight(0) == 0.0
+    assert pytest.approx(sched.get_weight(3), rel=1e-5) == 0.4
+    assert sched.get_weight(6) == 0.0
+    assert pytest.approx(sched.get_weight(9), rel=1e-5) == 0.4
+    assert sched.get_weight(12) == 0.0
+
+
+def test_cyclical_constraint_scheduler_zero_max_weight() -> None:
+    """Verifies that 0.0 max_weight always returns 0.0."""
+    sched = CyclicalConstraintScheduler(max_weight=0.0, t0_steps=10)
+    for step in range(50):
+        assert sched.get_weight(step) == 0.0
 
 

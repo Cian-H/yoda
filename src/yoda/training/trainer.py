@@ -1,6 +1,7 @@
 """Training engine and optimization loops for Yoda System 1 decision models."""
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +19,53 @@ from yoda.training.losses import FocalMarginLoss
 # logger initialized by loguru import
 
 __all__: list[str] = [
+    "CyclicalConstraintScheduler",
     "YodaTrainer",
 ]
+
+
+class CyclicalConstraintScheduler:
+    """Oscillating cosine schedule for loss constraint weights with warm restarts."""
+
+    def __init__(
+        self,
+        max_weight: float,
+        t0_steps: int,
+        t_mult: int = 2,
+        start_step: int = 0,
+    ) -> None:
+        """Initializes CyclicalConstraintScheduler.
+
+        Args:
+            max_weight: Peak weight at the top of the cosine cycle.
+            t0_steps: Duration (in steps) of the initial cycle.
+            t_mult: Multiplier to lengthen cycle duration after each restart.
+            start_step: Step at which schedule begins (returns 0.0 prior to this).
+        """
+        self.max_weight = float(max_weight)
+        self.t0_steps = max(1, int(t0_steps))
+        self.t_mult = max(1, int(t_mult))
+        self.start_step = max(0, int(start_step))
+
+    def get_weight(self, step: int) -> float:
+        """Computes scheduled weight at the given step.
+
+        Args:
+            step: Current global training step.
+
+        Returns:
+            Cosine-annealed constraint weight.
+        """
+        if step < self.start_step:
+            return 0.0
+        step -= self.start_step
+        curr_t0 = self.t0_steps
+        curr_step = step
+        while curr_step >= curr_t0:
+            curr_step -= curr_t0
+            curr_t0 = int(curr_t0 * self.t_mult)
+        progress = curr_step / curr_t0
+        return self.max_weight * 0.5 * (1.0 - math.cos(math.pi * progress))
 
 
 class YodaTrainer:
@@ -83,6 +129,8 @@ class YodaTrainer:
         self.belnap_weight = float(belnap_weight)
         self.ltn_weight = float(ltn_weight)
         self.assertion_weight = float(assertion_weight)
+        self.current_ltn_w: float = self.ltn_weight
+        self.current_assertion_w: float = self.assertion_weight
         self.focal_gamma = float(focal_gamma)
         self.margin = float(margin)
         self.margin_weight = float(margin_weight)
@@ -133,6 +181,24 @@ class YodaTrainer:
             self.ltn_weight,
             self.assertion_weight,
         )
+
+    @property
+    def ltn_w(self) -> float:
+        """Returns base LTN constraint weight."""
+        return self.ltn_weight
+
+    @ltn_w.setter
+    def ltn_w(self, value: float) -> None:
+        self.ltn_weight = float(value)
+
+    @property
+    def assertion_w(self) -> float:
+        """Returns base assertion loss weight."""
+        return self.assertion_weight
+
+    @assertion_w.setter
+    def assertion_w(self, value: float) -> None:
+        self.assertion_weight = float(value)
 
     def _compute_independent_loss_and_metrics(
         self,
@@ -188,7 +254,7 @@ class YodaTrainer:
             base_loss = base_cls_loss
 
         # Grouped LTN constraint loss
-        if self.ltn_weight > 0.0:
+        if self.current_ltn_w > 0.0:
             hierarchy_edges = batch.get("hierarchy_edges")
             ltn_loss = self.ltn_criterion(
                 out,
@@ -196,12 +262,12 @@ class YodaTrainer:
                 group_ids=group_ids,
                 hierarchy_edges=hierarchy_edges,
             )
-            total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
+            total_loss = base_loss * (1.0 + self.current_ltn_w * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)
             total_loss = base_loss
 
-        total_loss = total_loss + self.assertion_weight * assertion_loss
+        total_loss = total_loss + self.current_assertion_w * assertion_loss
 
         correct_count = 0
         for gid in unique_groups:
@@ -306,7 +372,7 @@ class YodaTrainer:
             belnap_loss = torch.tensor(0.0, device=self.device)
             base_loss = base_cls_loss
 
-        if self.ltn_weight > 0.0:
+        if self.current_ltn_w > 0.0:
             hierarchy_edges = batch.get("hierarchy_edges")
             ltn_loss = self.ltn_criterion(
                 out,
@@ -314,12 +380,12 @@ class YodaTrainer:
                 active_mask=active_mask,
                 hierarchy_edges=hierarchy_edges,
             )
-            total_loss = base_loss * (1.0 + self.ltn_weight * ltn_loss)
+            total_loss = base_loss * (1.0 + self.current_ltn_w * ltn_loss)
         else:
             ltn_loss = torch.tensor(0.0, device=self.device)
             total_loss = base_loss
 
-        total_loss = total_loss + self.assertion_weight * assertion_loss
+        total_loss = total_loss + self.current_assertion_w * assertion_loss
 
         preds = out["choice"] if "choice" in out else torch.argmax(logits, dim=-1)
         correct = (preds == target_indices).sum().item()
@@ -372,6 +438,25 @@ class YodaTrainer:
         running_loss = 0.0
 
         for batch in dataloader:
+            current_ltn_w = (
+                self.ltn_scheduler.get_weight(self._global_step)
+                if hasattr(self, "ltn_scheduler")
+                else self.ltn_w
+            )
+            current_assertion_w = (
+                self.assertion_scheduler.get_weight(self._global_step)
+                if hasattr(self, "assertion_scheduler")
+                else self.assertion_w
+            )
+            self.current_ltn_w = current_ltn_w
+            self.current_assertion_w = current_assertion_w
+
+            if self.writer is not None:
+                self.writer.add_scalar("train/ltn_weight", current_ltn_w, self._global_step)
+                self.writer.add_scalar(
+                    "train/assertion_weight", current_assertion_w, self._global_step
+                )
+
             self.optimizer.zero_grad()
             loss, metrics = self._compute_loss_and_metrics(batch)
 
@@ -467,6 +552,8 @@ class YodaTrainer:
             Dictionary with eval metrics including loss, components, accuracy, and knowledge.
         """
         self.model.eval()
+        self.current_ltn_w = self.ltn_w
+        self.current_assertion_w = self.assertion_w
         total_loss = 0.0
         total_ce_loss = 0.0
         total_focal_loss = 0.0
@@ -553,6 +640,20 @@ class YodaTrainer:
                 self.t_mult,
                 eta_min,
                 self.lr_decay,
+            )
+
+        if self.scheduler is not None and hasattr(self.scheduler, "T_0"):
+            self.ltn_scheduler = CyclicalConstraintScheduler(
+                self.ltn_w,
+                t0_steps=self.scheduler.T_0,
+                t_mult=self.scheduler.T_mult,
+                start_step=0,
+            )
+            self.assertion_scheduler = CyclicalConstraintScheduler(
+                self.assertion_w,
+                t0_steps=self.scheduler.T_0,
+                t_mult=self.scheduler.T_mult,
+                start_step=self.scheduler.T_0,
             )
 
         best_eval_loss = float("inf")
