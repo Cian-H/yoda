@@ -45,8 +45,14 @@ def objective(trial: optuna.Trial) -> float:
     lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
     backbone_lr = trial.suggest_float("backbone_lr", 1e-6, 1e-4, log=True)
     t0_epochs = trial.suggest_int("t0_epochs", 1, 3)
+    t_mult = trial.suggest_int("t_mult", 1, 2)
+    lr_decay = trial.suggest_float("lr_decay", 0.5, 1.0)
 
-    # 4. Generate trial checkpoint directory
+    # 4. Loss Weights
+    belnap_weight = trial.suggest_float("belnap_weight", 0.5, 2.0)
+    margin_weight = trial.suggest_float("margin_weight", 0.1, 1.0)
+
+    # 5. Generate trial checkpoint directory
     trial_dir = Path("models/optuna") / f"trial_{trial.number}"
     trial_dir.mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +85,14 @@ def objective(trial: optuna.Trial) -> float:
         str(backbone_lr),
         "--t0-epochs",
         str(t0_epochs),
+        "--t-mult",
+        str(t_mult),
+        "--lr-decay",
+        str(lr_decay),
+        "--belnap-weight",
+        str(belnap_weight),
+        "--margin-weight",
+        str(margin_weight),
         "--checkpoint-dir",
         str(trial_dir),
         "--output-model",
