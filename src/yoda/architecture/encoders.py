@@ -1,6 +1,6 @@
 """Phase 1 input encoders for text, symbolic states, and constraints."""
 
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -30,8 +30,10 @@ class TextEncoder(nn.Module):
             self._dim = target_dim or 256
             self.dummy_embed = nn.Embedding(1000, self._dim, device=device, dtype=dtype)
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name).to(device=device, dtype=dtype)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+            self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(
+                device=device, dtype=dtype
+            )
             self._dim = self.model.config.hidden_size
 
         # Optional adapter if target_dim is provided and differs from native hidden size
@@ -64,6 +66,7 @@ class TextEncoder(nn.Module):
             fake_ids = torch.randint(0, 1000, (batch_size, seq_len), device=dev)
             return self.dummy_embed(fake_ids)
 
+        assert self.tokenizer is not None
         inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
         if self.model is not None:
             target_device = next(self.model.parameters()).device
@@ -71,6 +74,7 @@ class TextEncoder(nn.Module):
         elif self.device is not None:
             inputs = inputs.to(self.device)
 
+        assert self.model is not None
         outputs = self.model(**inputs)
         # Sequence of hidden states (batch_size, seq_len, hidden_size)
         hidden_states = outputs.last_hidden_state
@@ -145,6 +149,7 @@ class ConstraintEncoder(nn.Module):
         if not constraints_batch:
             return self.text_encoder([])
         if isinstance(constraints_batch[0], str):
-            return self.text_encoder(constraints_batch)  # type: ignore[arg-type]
-        formatted = [self._format_constraints(c) for c in constraints_batch]  # type: ignore[arg-type]
+            return self.text_encoder(cast(list[str], constraints_batch))
+        nested_batch = cast(list[list[str]], constraints_batch)
+        formatted = [self._format_constraints(c) for c in nested_batch]
         return self.text_encoder(formatted)
