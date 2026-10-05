@@ -10,9 +10,13 @@ from yoda.training.losses import (
     FocalMarginLoss,
     MarginLoss,
 )
-from yoda.training.trainer import YodaTrainer
+from yoda.training.trainer import (
+    CyclicalConstraintScheduler,
+    YodaTrainer,
+)
 
 __all__: list[str] = [
+    "CyclicalConstraintScheduler",
     "FocalLoss",
     "FocalMarginLoss",
     "MarginLoss",
