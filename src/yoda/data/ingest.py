@@ -670,4 +670,4 @@ class DatasetIngestionPipeline:
 
 if __name__ == "__main__":
     pipeline = DatasetIngestionPipeline()
-    pipeline.run_pipeline()
+    pipeline.process_and_aggregate()
