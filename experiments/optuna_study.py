@@ -163,8 +163,8 @@ def main() -> None:
     parser.add_argument(
         "--n-trials",
         type=int,
-        default=1000,
-        help="Number of Optuna optimization trials (default: 1000)",
+        default=2500,
+        help="Number of Optuna optimization trials (default: 2500)",
     )
     parser.add_argument(
         "--seed",
@@ -193,7 +193,7 @@ def main() -> None:
         while seed == 42:
             seed = secrets.randbits(32)
 
-    sampler = optuna.samplers.TPESampler(seed=seed)
+    sampler = optuna.samplers.TPESampler(seed=seed, multivariate=True)
 
     Path("data").mkdir(exist_ok=True)
     storage = "sqlite:///data/optuna.db"
