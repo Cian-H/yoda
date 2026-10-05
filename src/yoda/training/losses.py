@@ -146,7 +146,7 @@ class MarginLoss(nn.Module):
                 else:
                     target_idx = g_target
                 target_val = g_logits[target_idx]
-                competitors = torch.cat([g_logits[:target_idx], g_logits[target_idx + 1:]])
+                competitors = torch.cat([g_logits[:target_idx], g_logits[target_idx + 1 :]])
                 if competitors.numel() == 0:
                     group_losses.append(torch.tensor(0.0, device=logits.device, dtype=logits.dtype))
                 else:
@@ -247,4 +247,3 @@ class FocalMarginLoss(nn.Module):
             "focal_loss": focal,
             "margin_loss": margin,
         }
-

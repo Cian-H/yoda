@@ -398,6 +398,189 @@ class TestYodaTrainer:
         assert trainer.scheduler is not None
         assert trainer.optimizer.param_groups[0]["lr"] != 1e-3
 
+    def test_trainer_assertion_loss_telemetry(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies assertion loss is recorded in train_epoch, evaluate, and fit."""
+        trainer_zero = YodaTrainer(model=dummy_engine, assertion_weight=0.0, device="cpu")
+        trainer_weighted = YodaTrainer(model=dummy_engine, assertion_weight=0.5, device="cpu")
+
+        assert trainer_weighted.assertion_weight == 0.5
+
+        train_metrics = trainer_weighted.train_epoch(synthetic_loader)
+        assert "assertion_loss" in train_metrics
+        assert train_metrics["assertion_loss"] >= 0.0
+
+        eval_metrics = trainer_weighted.evaluate(synthetic_loader)
+        assert "assertion_loss" in eval_metrics
+        assert eval_metrics["assertion_loss"] >= 0.0
+
+        batch = next(iter(synthetic_loader))
+        loss_zero, m_zero = trainer_zero._compute_loss_and_metrics(batch)
+        loss_weighted, m_weighted = trainer_weighted._compute_loss_and_metrics(batch)
+
+        assert "assertion_loss" in m_zero
+        assert "assertion_loss" in m_weighted
+        if m_weighted["assertion_loss"] > 0:
+            assert loss_weighted.item() > loss_zero.item()
+
+        history = trainer_weighted.fit(
+            train_loader=synthetic_loader,
+            eval_loader=synthetic_loader,
+            epochs=1,
+        )
+        assert "train_assertion_loss" in history[0]
+        assert "eval_assertion_loss" in history[0]
+
+    def test_trainer_nan_loss_skip(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies train_epoch logs a warning and skips batch when loss is NaN."""
+        from loguru import logger
+
+        trainer = YodaTrainer(model=dummy_engine, device="cpu")
+        original_compute = trainer._compute_loss_and_metrics
+
+        def nan_compute(batch: Any) -> tuple[torch.Tensor, dict[str, float]]:
+            return (
+                torch.tensor(float("nan"), requires_grad=True),
+                {
+                    "loss": float("nan"),
+                    "ce_loss": 0.0,
+                    "focal_loss": 0.0,
+                    "margin_loss": 0.0,
+                    "belnap_loss": 0.0,
+                    "ltn_loss": 0.0,
+                    "assertion_loss": 0.0,
+                    "correct": 0.0,
+                    "total": 1.0,
+                    "knowledge_sum": 0.0,
+                },
+            )
+
+        trainer._compute_loss_and_metrics = nan_compute  # type: ignore[method-assign]
+        warnings: list[str] = []
+        handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+        try:
+            metrics = trainer.train_epoch(synthetic_loader)
+            assert any("Loss is NaN" in w for w in warnings)
+            assert metrics["loss"] == 0.0
+        finally:
+            logger.remove(handler_id)
+            trainer._compute_loss_and_metrics = original_compute
+
+    def test_trainer_loss_spike_warning(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        """Verifies train_epoch warns when batch loss spikes significantly above running_loss."""
+        from loguru import logger
+
+        trainer = YodaTrainer(model=dummy_engine, device="cpu")
+
+        batch1 = {
+            "queries": ["q1"],
+            "states": [{"a": 1}],
+            "constraints": [["c1", "c2"]],
+            "target_indices": torch.tensor([0]),
+        }
+        batch2 = {
+            "queries": ["q2"],
+            "states": [{"a": 2}],
+            "constraints": [["c1", "c2"]],
+            "target_indices": torch.tensor([1]),
+        }
+
+        call_idx = 0
+
+        def spike_compute(batch: Any) -> tuple[torch.Tensor, dict[str, float]]:
+            nonlocal call_idx
+            val = 1.0 if call_idx == 0 else 10.0
+            call_idx += 1
+            loss_t = dummy_engine.decision_head.w_pos.weight.sum() * 0.0 + val
+            return loss_t, {
+                "loss": val,
+                "ce_loss": val,
+                "focal_loss": val,
+                "margin_loss": 0.0,
+                "belnap_loss": 0.0,
+                "ltn_loss": 0.0,
+                "assertion_loss": 0.0,
+                "correct": 1.0,
+                "total": 1.0,
+                "knowledge_sum": 0.5,
+            }
+
+        trainer._compute_loss_and_metrics = spike_compute  # type: ignore[method-assign]
+        warnings: list[str] = []
+        handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+        try:
+            trainer.train_epoch([batch1, batch2])  # type: ignore[arg-type]
+            assert any("Loss spike detected" in w for w in warnings)
+        finally:
+            logger.remove(handler_id)
+
+    def test_trainer_infinitesimal_gradient_warning(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies train_epoch warns when gradient norm is infinitesimal (< 1e-7)."""
+        from loguru import logger
+
+        trainer = YodaTrainer(model=dummy_engine, device="cpu")
+
+        def zero_grad_compute(batch: Any) -> tuple[torch.Tensor, dict[str, float]]:
+            loss = dummy_engine.decision_head.w_pos.weight.sum() * 0.0
+            return loss, {
+                "loss": 0.0,
+                "ce_loss": 0.0,
+                "focal_loss": 0.0,
+                "margin_loss": 0.0,
+                "belnap_loss": 0.0,
+                "ltn_loss": 0.0,
+                "assertion_loss": 0.0,
+                "correct": 1.0,
+                "total": 1.0,
+                "knowledge_sum": 0.0,
+            }
+
+        trainer._compute_loss_and_metrics = zero_grad_compute  # type: ignore[method-assign]
+        warnings: list[str] = []
+        handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+        try:
+            trainer.train_epoch(synthetic_loader)
+            assert any("Infinitesimal gradient detected" in w for w in warnings)
+        finally:
+            logger.remove(handler_id)
+
+    def test_trainer_nan_gradient_skip(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies train_epoch skips step and logs warning when NaN gradient is detected."""
+        from loguru import logger
+
+        trainer = YodaTrainer(model=dummy_engine, device="cpu")
+
+        param = next(dummy_engine.parameters())
+        hook_handle = param.register_hook(lambda grad: torch.full_like(grad, float("nan")))
+
+        warnings: list[str] = []
+        handler_id = logger.add(lambda msg: warnings.append(str(msg)), level="WARNING")
+        try:
+            trainer.train_epoch(synthetic_loader)
+            assert any("NaN gradient detected" in w for w in warnings)
+        finally:
+            hook_handle.remove()
+            logger.remove(handler_id)
+            trainer.optimizer.zero_grad()
+
 
 class TestYodaLightningAdapterScheduler:
     """Verifies scheduler configuration in YodaLightningAdapter."""
@@ -454,3 +637,60 @@ def test_training_package_exports() -> None:
     assert "FocalLoss" in training.__all__
     assert "MarginLoss" in training.__all__
     assert "FocalMarginLoss" in training.__all__
+
+
+def test_train_yoda_cli_assertion_weight() -> None:
+    """Verifies --assertion-weight argument parsing and default."""
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args([])
+    assert default_args.assertion_weight == 0.1
+
+    custom_args = parser.parse_args(["--assertion-weight", "0.35"])
+    assert custom_args.assertion_weight == 0.35
+
+
+def test_train_yoda_cli_dataset_splits() -> None:
+    """Verifies dataset splitting CLI arguments and 80/10/10 defaults."""
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args([])
+    assert args.eval_path is None
+    assert args.test_path is None
+    assert args.max_samples is None
+    assert args.train_ratio == 0.8
+    assert args.val_ratio == 0.1
+    assert args.test_ratio == 0.1
+
+    custom = parser.parse_args([
+        "--max-samples",
+        "5000",
+        "--train-ratio",
+        "0.7",
+        "--val-ratio",
+        "0.15",
+        "--test-ratio",
+        "0.15",
+        "--max-train-samples",
+        "3000",
+    ])
+    assert custom.max_samples == 5000
+    assert custom.train_ratio == 0.7
+    assert custom.val_ratio == 0.15
+    assert custom.test_ratio == 0.15
+    assert custom.max_train_samples == 3000
+

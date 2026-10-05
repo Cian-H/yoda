@@ -108,11 +108,13 @@ class TestFocalMarginLoss:
     def test_hybrid_computation_and_metrics(self) -> None:
         logits = torch.randn(3, 5, requires_grad=True)
         targets = torch.tensor([0, 1, 4])
-        active_mask = torch.tensor([
-            [True, True, True, False, False],
-            [True, True, True, True, False],
-            [True, True, True, True, True],
-        ])
+        active_mask = torch.tensor(
+            [
+                [True, True, True, False, False],
+                [True, True, True, True, False],
+                [True, True, True, True, True],
+            ]
+        )
 
         criterion = FocalMarginLoss(gamma=2.0, margin=0.2, margin_weight=0.1)
         total_loss, metrics = criterion(logits, targets, active_mask=active_mask)

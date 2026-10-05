@@ -331,7 +331,6 @@ class TestYodaDecisionEngine:
             assert engine.decision_head.d_model == 384
 
 
-
 def test_architecture_package_exports() -> None:
     """Verifies that YodaDecisionEngine and BelnapDecisionHead are exported from architecture."""
     import yoda.architecture as arch
