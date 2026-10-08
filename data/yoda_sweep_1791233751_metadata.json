@@ -1,0 +1,10 @@
+{
+  "study_name": "yoda_sweep_1791233751",
+  "seed": 283791249,
+  "n_trials": 2500,
+  "storage": "sqlite:///data/optuna.db",
+  "direction": "maximize",
+  "sampler": "TPESampler",
+  "created_at": 1791233752.079085,
+  "notes": "Stopped after 250 trials with no improvement."
+}
