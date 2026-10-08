@@ -16,9 +16,9 @@ from experiments.optuna_study_narrow import (
     FIXED_T0_EPOCHS,
     FIXED_T_MULT,
     FIXED_TEXT_MODEL_NAME,
-    StudyEarlyStoppingCallback,
     objective,
 )
+from yoda.hyperopt.optuna import StudyEarlyStoppingCallback
 
 
 def test_fixed_parameters_consistency() -> None:
