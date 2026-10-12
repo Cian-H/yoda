@@ -6,7 +6,7 @@ representations via multihead cross-attention with learnable query tokens.
 
 import logging
 from collections.abc import Callable
-from typing import ClassVar
+from typing import ClassVar, Literal, cast, overload
 
 import torch
 from torch import nn
@@ -134,10 +134,11 @@ class MultiheadPooledAttention(nn.Module):
 class BelnapMultiheadPooledAttention(nn.Module):
     """Belnap Bilattice Multihead Pooled Attention.
 
-    Pools variable-length sequences into fixed-dimensional latent representations using
-    epistemic query probes and Belnap four-valued cross-attention. Preserves both positive
-    and negative evidence, suppressing uninformative inputs to Neither (k -> 0) and
-    preserving contradiction (Both: e+ >> 0, e- >> 0) without softmax attention sinks.
+    Pools variable-length sequences into fixed-dimensional latent representations or
+    structured Belnap states using epistemic query probes and Belnap four-valued
+    cross-attention. Preserves both positive and negative evidence, suppressing
+    uninformative inputs to Neither (k -> 0) and preserving contradiction (Both:
+    e+ >> 0, e- >> 0) without softmax attention sinks.
     """
 
     def __init__(
@@ -146,6 +147,7 @@ class BelnapMultiheadPooledAttention(nn.Module):
         num_queries: int = 4,
         num_heads: int | None = None,
         init_bias: float = 0.0,
+        include_projection: bool = True,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -156,6 +158,9 @@ class BelnapMultiheadPooledAttention(nn.Module):
             num_queries: Number of epistemic query probe tokens.
             num_heads: Number of attention heads. Defaults to 4, 2, or 1 based on embed_dim.
             init_bias: Initial bias for BelnapAttention output projections. Defaults to 0.0.
+            include_projection: Whether to instantiate the dense output projection layer
+                `self.proj`. Defaults to True for backward compatibility. If False, avoids
+                allocating unused parameters when only `BelnapState` is needed.
             device: Target execution device.
             dtype: Target execution data type.
         """
@@ -166,6 +171,7 @@ class BelnapMultiheadPooledAttention(nn.Module):
         self.embed_dim = embed_dim
         self.num_queries = num_queries
         self.num_heads = num_heads
+        self.include_projection = include_projection
 
         # Epistemic learnable query probes for positive and negative evidence
         self.raw_q_pos = nn.Parameter(
@@ -189,13 +195,16 @@ class BelnapMultiheadPooledAttention(nn.Module):
             init_bias=init_bias,
         )
 
-        # Output projection from concatenated dual evidence features to latent vector
-        self.proj = nn.Linear(
-            num_queries * 2 * embed_dim,
-            embed_dim,
-            device=device,
-            dtype=dtype,
-        )
+        # Optional output projection from concatenated dual evidence features to latent vector
+        if include_projection:
+            self.proj: nn.Linear | None = nn.Linear(
+                num_queries * 2 * embed_dim,
+                embed_dim,
+                device=device,
+                dtype=dtype,
+            )
+        else:
+            self.proj = None
 
         logger.debug(
             "architecture.belnap_mpa.init",
@@ -204,27 +213,64 @@ class BelnapMultiheadPooledAttention(nn.Module):
                 "num_queries": num_queries,
                 "num_heads": num_heads,
                 "init_bias": init_bias,
+                "include_projection": include_projection,
             },
         )
+
+    @overload
+    def forward(
+        self,
+        x: BelnapState | torch.Tensor,
+        mask: torch.Tensor | None = None,
+        return_latent: Literal[True] = True,
+    ) -> tuple[torch.Tensor, BelnapState]: ...
+
+    @overload
+    def forward(
+        self,
+        x: BelnapState | torch.Tensor,
+        mask: torch.Tensor | None = None,
+        return_latent: Literal[False] = False,
+    ) -> BelnapState: ...
+
+    @overload
+    def forward(
+        self,
+        x: BelnapState | torch.Tensor,
+        mask: torch.Tensor | None = None,
+        return_latent: bool | None = None,
+    ) -> BelnapState | tuple[torch.Tensor, BelnapState]: ...
 
     def forward(
         self,
         x: BelnapState | torch.Tensor,
         mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, BelnapState]:
+        return_latent: bool | None = None,
+    ) -> BelnapState | tuple[torch.Tensor, BelnapState]:
         """Executes Belnap epistemic pooled attention over input sequences.
 
         Args:
             x: Input sequence as either a `BelnapState` or a continuous `torch.Tensor`
                 of shape `(batch_size, seq_len, embed_dim)`.
             mask: Optional attention mask of shape `(batch_size, 1, num_queries, seq_len)`.
+            return_latent: If True, computes and returns `(latent, pooled_state)`.
+                If False, returns `pooled_state` directly. If None, defaults to
+                `self.include_projection`.
 
         Returns:
-            A tuple of `(latent, pooled_state)`:
-            - `latent`: Projected fixed-dimensional representation `(batch_size, embed_dim)`.
-            - `pooled_state`: Aggregated `BelnapState` of shape
-              `(batch_size, num_queries, embed_dim)`.
+            If `return_latent` is True:
+                Tuple `(latent, pooled_state)` of projected latent `(batch_size, embed_dim)`
+                and aggregated `BelnapState` `(batch_size, num_queries, embed_dim)`.
+            If `return_latent` is False:
+                Aggregated `BelnapState` `(batch_size, num_queries, embed_dim)`.
+
+        Raises:
+            RuntimeError: If `return_latent` is True but `include_projection` was False.
         """
+        should_return_latent = (
+            return_latent if return_latent is not None else self.include_projection
+        )
+
         if isinstance(x, BelnapState):
             kv_state = x
             batch_size = x.e_pos.size(0)
@@ -242,17 +288,44 @@ class BelnapMultiheadPooledAttention(nn.Module):
         # Bipolar cross-attention pooling
         pooled_state = self.belnap_attn(q=q_state, kv=kv_state, mask=mask)
 
-        # Flatten dual evidence and project into latent space
-        features = torch.cat([pooled_state.e_pos, pooled_state.e_neg], dim=-1).flatten(1)
-        latent = self.proj(features)
-
         logger.debug(
             "architecture.belnap_mpa.forward",
             extra={
                 "batch_size": batch_size,
                 "input_type": "BelnapState" if isinstance(x, BelnapState) else "Tensor",
                 "num_queries": self.num_queries,
+                "return_latent": should_return_latent,
             },
         )
 
+        if not should_return_latent:
+            return pooled_state
+
+        if self.proj is None:
+            raise RuntimeError(
+                "Cannot return latent vector: 'include_projection' was set to False "
+                "during initialization."
+            )
+
+        # Flatten dual evidence and project into latent space
+        features = torch.cat([pooled_state.e_pos, pooled_state.e_neg], dim=-1).flatten(1)
+        latent = self.proj(features)
+
         return latent, pooled_state
+
+    def forward_pooled(
+        self,
+        x: BelnapState | torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> BelnapState:
+        """Convenience method returning aggregated BelnapState directly without projection."""
+        return cast(BelnapState, self(x, mask=mask, return_latent=False))
+
+    def forward_latent(
+        self,
+        x: BelnapState | torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Convenience method returning projected 1D latent vector directly."""
+        res = self(x, mask=mask, return_latent=True)
+        return cast(tuple[torch.Tensor, BelnapState], res)[0]

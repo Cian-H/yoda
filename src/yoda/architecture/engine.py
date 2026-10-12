@@ -226,6 +226,7 @@ class YodaDecisionEngine(nn.Module):
             embed_dim=effective_dim,
             num_queries=num_q_probes,
             num_heads=n_heads,
+            include_projection=False,
             device=device,
             dtype=dtype,
         )
@@ -233,6 +234,7 @@ class YodaDecisionEngine(nn.Module):
             embed_dim=effective_dim,
             num_queries=num_c_probes,
             num_heads=n_heads,
+            include_projection=False,
             device=device,
             dtype=dtype,
         )
@@ -240,32 +242,37 @@ class YodaDecisionEngine(nn.Module):
             embed_dim=effective_dim,
             num_queries=num_k_probes,
             num_heads=n_heads,
+            include_projection=False,
             device=device,
             dtype=dtype,
         )
 
         # Phase 3: Reasoning Core (Cascaded Cross-Attention)
-        self.reasoning_layers = nn.ModuleList([
-            nn.ModuleDict({
-                "context": BelnapTransformerBlock(
-                    d_model=effective_dim,
-                    n_heads=n_heads,
-                    d_hidden=int(effective_dim * d_hidden_multiplier),
-                    conflation_weight=conflation_weight,
-                    residual_weight=residual_weight,
-                    dropout=dropout,
-                ),
-                "constraint": BelnapTransformerBlock(
-                    d_model=effective_dim,
-                    n_heads=n_heads,
-                    d_hidden=int(effective_dim * d_hidden_multiplier),
-                    conflation_weight=conflation_weight,
-                    residual_weight=residual_weight,
-                    dropout=dropout,
-                ),
-            })
-            for _ in range(num_reasoning_blocks)
-        ])
+        self.reasoning_layers = nn.ModuleList(
+            [
+                nn.ModuleDict(
+                    {
+                        "context": BelnapTransformerBlock(
+                            d_model=effective_dim,
+                            n_heads=n_heads,
+                            d_hidden=int(effective_dim * d_hidden_multiplier),
+                            conflation_weight=conflation_weight,
+                            residual_weight=residual_weight,
+                            dropout=dropout,
+                        ),
+                        "constraint": BelnapTransformerBlock(
+                            d_model=effective_dim,
+                            n_heads=n_heads,
+                            d_hidden=int(effective_dim * d_hidden_multiplier),
+                            conflation_weight=conflation_weight,
+                            residual_weight=residual_weight,
+                            dropout=dropout,
+                        ),
+                    }
+                )
+                for _ in range(num_reasoning_blocks)
+            ]
+        )
 
         # Phase 4: Judgment
         self.decision_head = BelnapDecisionHead(
@@ -364,9 +371,9 @@ class YodaDecisionEngine(nn.Module):
         k_emb = self.constraint_encoder(target_cand)
 
         # 2. Pooling (Epistemic Sieve)
-        _, q_state = self.q_mpa(q_emb)
-        _, c_state = self.c_mpa(c_emb)
-        _, k_state = self.k_mpa(k_emb)
+        q_state = cast(BelnapState, self.q_mpa(q_emb))
+        c_state = cast(BelnapState, self.c_mpa(c_emb))
+        k_state = cast(BelnapState, self.k_mpa(k_emb))
 
         # 3. Cascaded Cross-Attention Reasoning Core
         stage_names = ["post_pooling"]
@@ -457,9 +464,7 @@ class YodaDecisionEngine(nn.Module):
         for sample in legacy_constraints:
             sample_len = len(sample)
             row = [
-                (not str(sample[c_idx]).startswith("none:"))
-                if c_idx < sample_len
-                else False
+                (not str(sample[c_idx]).startswith("none:")) if c_idx < sample_len else False
                 for c_idx in range(num_out_choices)
             ]
             mask_list.append(row)
@@ -496,10 +501,7 @@ class YodaDecisionEngine(nn.Module):
         active_mask: torch.Tensor | None,
     ) -> dict[str, Any]:
         """Calculates stage attributions and intermediate probes for diagnostics."""
-        probe_outs = [
-            self.decision_head(s, candidate_states=cand_states)
-            for s in stage_states
-        ]
+        probe_outs = [self.decision_head(s, candidate_states=cand_states) for s in stage_states]
         if active_mask is not None and active_mask.numel() > 0:
             for probe in probe_outs:
                 probe["logits"] = probe["logits"].masked_fill(~active_mask, -1e9)

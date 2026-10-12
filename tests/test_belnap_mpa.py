@@ -1,5 +1,6 @@
 """Unit and property tests for BelnapMultiheadPooledAttention."""
 
+import pytest
 import torch
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -181,3 +182,99 @@ def test_belnap_mpa_hypothesis_bounds(pos_val: float, neg_val: float) -> None:
 
     assert (pooled_state.truth >= 0.0).all() and (pooled_state.truth <= 1.0).all()
     assert (pooled_state.knowledge >= 0.0).all() and (pooled_state.knowledge <= 1.0).all()
+
+
+def test_belnap_mpa_include_projection_false() -> None:
+    """Verifies that include_projection=False instantiates no proj layer.
+
+    Also asserts that calling the module returns BelnapState directly.
+    """
+    batch_size = 2
+    seq_len = 4
+    embed_dim = 16
+    num_queries = 3
+
+    mpa = BelnapMultiheadPooledAttention(
+        embed_dim=embed_dim,
+        num_queries=num_queries,
+        include_projection=False,
+    )
+
+    assert mpa.proj is None
+    # Verify no proj parameters in state_dict or parameters()
+    param_names = [name for name, _ in mpa.named_parameters()]
+    assert not any(name.startswith("proj.") for name in param_names)
+    assert any(name.startswith("input_proj.") for name in param_names)
+
+    raw_x = torch.randn(batch_size, seq_len, embed_dim, requires_grad=True)
+    out = mpa(raw_x)
+
+    # Must return BelnapState directly, not a tuple
+    assert isinstance(out, BelnapState)
+    assert out.e_pos.shape == (batch_size, num_queries, embed_dim)
+    assert out.e_neg.shape == (batch_size, num_queries, embed_dim)
+
+    loss = out.e_pos.sum() + out.truth.sum()
+    loss.backward()
+    assert raw_x.grad is not None
+    assert mpa.raw_q_pos.grad is not None
+
+
+def test_belnap_mpa_include_projection_false_raises_on_return_latent() -> None:
+    """Verifies that requesting return_latent=True when include_projection=False raises error."""
+    mpa = BelnapMultiheadPooledAttention(embed_dim=16, num_queries=2, include_projection=False)
+    raw_x = torch.randn(2, 4, 16)
+
+    with pytest.raises(RuntimeError, match="include_projection"):
+        mpa(raw_x, return_latent=True)
+
+
+def test_belnap_mpa_convenience_methods() -> None:
+    """Verifies forward_pooled and forward_latent convenience methods."""
+    batch_size = 2
+    seq_len = 5
+    embed_dim = 16
+    num_queries = 3
+
+    mpa = BelnapMultiheadPooledAttention(
+        embed_dim=embed_dim,
+        num_queries=num_queries,
+        include_projection=True,
+    )
+
+    raw_x = torch.randn(batch_size, seq_len, embed_dim)
+
+    # forward_pooled returns BelnapState
+    pooled = mpa.forward_pooled(raw_x)
+    assert isinstance(pooled, BelnapState)
+    assert pooled.e_pos.shape == (batch_size, num_queries, embed_dim)
+
+    # forward_latent returns Tensor
+    latent = mpa.forward_latent(raw_x)
+    assert isinstance(latent, torch.Tensor)
+    assert latent.shape == (batch_size, embed_dim)
+
+
+def test_yoda_decision_engine_disables_mpa_projection() -> None:
+    """Verifies that YodaDecisionEngine initializes MPAs with zero projection parameters."""
+    from yoda.architecture.engine import YodaDecisionEngine
+
+    engine = YodaDecisionEngine(
+        text_model_name="dummy",
+        embed_dim=64,
+        num_q_probes=4,
+        num_c_probes=8,
+        num_k_probes=6,
+    )
+
+    assert engine.q_mpa.proj is None
+    assert engine.c_mpa.proj is None
+    assert engine.k_mpa.proj is None
+
+    # Forward pass executes cleanly
+    queries = ["test query"]
+    states = [{"key": "val"}]
+    constraints = [["opt0", "opt1"]]
+    out = engine(queries=queries, states=states, constraints=constraints)
+    assert "logits" in out
+    assert "choice" in out
