@@ -10,6 +10,7 @@ pruning weight (`conflation_weight`) while locking in all empirical champion par
 - Scans num_q_probes in [7, 12] (expanding past upper bound 7).
 - Scans conflation_weight in [0.48, 0.65] (expanding past upper bound 0.50).
 - Enqueues Champion Trial #40 baseline point (num_q_probes=7, conflation_weight=0.49).
+- Defaults to 8 epochs and 16,000 samples to allow complete cosine scheduler annealing.
 """
 
 import argparse
@@ -101,7 +102,7 @@ def main() -> None:
         description="Run focused Optuna study scanning num_q_probes and conflation_weight.",
         default_n_trials=50,
         default_max_samples=16000,
-        default_epochs=6,
+        default_epochs=8,
         default_batch_size=8,
         default_early_stopping_patience=2,
         default_study_patience=20,

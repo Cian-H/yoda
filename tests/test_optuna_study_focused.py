@@ -61,7 +61,7 @@ def test_objective_command_construction(tmp_path: Path) -> None:
 
     args = argparse.Namespace(
         max_samples=16000,
-        epochs=6,
+        epochs=8,
         batch_size=8,
         early_stopping_patience=2,
         train_path=None,
@@ -81,3 +81,25 @@ def test_objective_command_construction(tmp_path: Path) -> None:
         assert params["backbone_lr"] == 6.0e-6
         assert params["num_c_probes"] == 14
         assert params["d_hidden_multiplier"] == 1.4
+        assert params["epochs"] == 8
+        assert params["max_samples"] == 16000
+
+
+def test_parser_defaults() -> None:
+    """Verify that build_base_study_parser defaults to 8 epochs and 16000 samples."""
+    from yoda.hyperopt.optuna import build_base_study_parser
+
+    parser = build_base_study_parser(
+        description="Test",
+        default_n_trials=50,
+        default_max_samples=16000,
+        default_epochs=8,
+        default_batch_size=8,
+        default_early_stopping_patience=2,
+        default_study_patience=20,
+    )
+    parsed = parser.parse_args([])
+    assert parsed.epochs == 8
+    assert parsed.max_samples == 16000
+    assert parsed.n_trials == 50
+    assert parsed.n_jobs == 1
