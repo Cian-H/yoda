@@ -273,7 +273,7 @@ Commit message conventions:
 
 - Imperative subject line under 70 characters, reflecting the prompt's intent.
 - Optional body paragraph for non-obvious *why*.
-- Include the co-author trailer your agent host uses (`Co-Authored-By: Claude <noreply@anthropic.com>` or the equivalent for the model running the task).
+- Note any AI agent assistance (e.g. Antigravity) in the commit description body (e.g. "Co-authored with Antigravity."). Do NOT use a Git `Co-Authored-By:` trailer with an email address, as email collisions on GitHub can inadvertently attribute commits and lines to third-party accounts.
 
 Stage files by explicit path (`git add <paths>`). Never `git add -A` or `git add .` — the prompt file, ADR, and outputs are a curated set, not everything dirty in the tree.
 
