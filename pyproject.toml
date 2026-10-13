@@ -36,6 +36,9 @@ dev = ["pytest>=8.0.0", "hypothesis>=6.100.0", "ruff>=0.4.0", "ty>=0.0.52"]
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# .agents/teamwork/ holds archival working documents of the agentic team sessions
+# (proposals, forensic scripts, verbatim handoffs) - not linted project source.
+exclude = [".agents/teamwork"]
 
 [tool.ruff.lint]
 select = [

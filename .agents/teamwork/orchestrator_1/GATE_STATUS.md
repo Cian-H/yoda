@@ -30,5 +30,15 @@ Gate Result: **PASS** (Mistral continuation, 2026-10-13): accuracy ceiling gate 
 gradient health gate across 10 seeds, negation equivariance exact, 401 unit tests,
 ruff clean.
 
-## Milestone 4 (Phase 4 Context Deduplication & Sweep: R5) — assigned to Mistral
-## Milestone 4 (Phase 4 Context Deduplication & Sweep: R5) — assigned to Mistral
+## Milestone 4 (Phase 4 Context Deduplication & Sweep: R5) — Iteration 1
+
+Gate Result: **PASS** (Mistral continuation, 2026-10-13): throughput speedup 3.2-5.4x
+>= 2.0x, all 74 Tier-4 e2e gates green (including accuracy ceiling, paraconsistent
+calibration, and gradient health from M1-M3), 409 unit tests, ruff clean.
+
+## Milestone 4 (Phase 4 Context Deduplication & Sweep: R5) — Iteration 1
+
+Gate Result: **PASS** (Mistral continuation, 2026-10-13): throughput speedup 3.2-5.4x
+>= 2.0x, all 74 Tier-4 e2e gates green (including accuracy ceiling, paraconsistent
+calibration, and gradient health from M1-M3), 409 unit tests, ruff clean.
+

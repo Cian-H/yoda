@@ -238,6 +238,7 @@ class YodaDecisionEngine(nn.Module):
         residual_weight: float = 0.15,
         dropout: float = 0.0,
         use_candidate_affinity: bool = False,
+        use_context_cache: bool = True,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -257,6 +258,9 @@ class YodaDecisionEngine(nn.Module):
             residual_weight: Interpolation weight alpha for convex combination residual joins.
             dropout: Dropout probability for reasoning transformer blocks and FFN.
             use_candidate_affinity: If True, uses dynamic bilateral candidate affinity scoring.
+            use_context_cache: If True, independent evaluation deduplicates shared
+                (query, state, task) contexts within a batch and memoizes their pooled
+                epistemic encodings across gradient-free forward calls.
             device: Target execution device.
             dtype: Target execution data type.
         """
@@ -273,6 +277,15 @@ class YodaDecisionEngine(nn.Module):
         self.residual_weight = residual_weight
         self.dropout = dropout
         self.use_candidate_affinity = use_candidate_affinity
+        self.use_context_cache = use_context_cache
+        # Maps (query, state, task) context keys to pooled epistemic states.
+        # Populated only during gradient-free forwards; any gradient-enabled
+        # forward clears it so evaluation never reads stale reasoning.
+        self._context_cache: dict[tuple[str, str, float], tuple[BelnapState, BelnapState]] = {}
+        # Maps candidate text to (pooled k-state, pooled raw candidate features).
+        # Same lifecycle as _context_cache: gradient-free only, cleared on any
+        # gradient-enabled forward.
+        self._candidate_cache: dict[str, tuple[BelnapState, torch.Tensor]] = {}
 
         # Phase 1: Encoders
         self.text_encoder = TextEncoder(
@@ -419,86 +432,93 @@ class YodaDecisionEngine(nn.Module):
         Returns:
             Dictionary containing calibrated decision logits, truth, knowledge, etc.
         """
-        is_independent = False
-        target_cand: list[str] | list[list[str]]
-        if candidates is not None:
-            target_cand = candidates
-            is_independent = True
-        elif constraints is not None:
-            target_cand = constraints
-            if (len(constraints) > 0 and isinstance(constraints[0], str)) or self.num_choices == 1:
-                is_independent = True
+        is_independent, target_cand = self._resolve_independent_mode(constraints, candidates)
+
+        # 1-3. Encoding, pooling, and reasoning. In independent mode the shared
+        # context side (queries + states) is deduplicated per unique
+        # (query, state, task) context and memoized across gradient-free calls.
+        if is_independent and self.use_context_cache:
+            if torch.is_grad_enabled() and self._context_cache:
+                # Weight updates require gradient-enabled forwards; drop stale
+                # memoized context states so evaluation never reads old reasoning.
+                self.clear_context_cache()
+            final_state, k_state, cached_cand_features, stage_states, stage_names = (
+                self._deduplicated_context_reasoning(
+                    queries=queries,
+                    states=states,
+                    target_cand=target_cand,
+                    task_scalars=task_scalars,
+                )
+            )
         else:
-            target_cand = []
-            is_independent = self.num_choices == 1
+            if hasattr(self.text_encoder, "forward_with_mask"):
+                q_emb, q_mask = self.text_encoder.forward_with_mask(queries)
+            else:
+                q_emb = self.text_encoder(queries)
+                q_mask = None
 
-        # 1. Encoding
-        if hasattr(self.text_encoder, "forward_with_mask"):
-            q_emb, q_mask = self.text_encoder.forward_with_mask(queries)
-        else:
-            q_emb = self.text_encoder(queries)
-            q_mask = None
+            if task_scalars is not None:
+                task_vector = self.task_proj(task_scalars)
+                if q_emb.dim() == 3:
+                    task_vector = task_vector.unsqueeze(1)
+                q_emb = q_emb + task_vector
 
-        if task_scalars is not None:
-            task_vector = self.task_proj(task_scalars)
-            if q_emb.dim() == 3:
-                task_vector = task_vector.unsqueeze(1)
-            q_emb = q_emb + task_vector
+            if hasattr(self.state_encoder, "forward_with_mask"):
+                c_emb, c_mask = self.state_encoder.forward_with_mask(states)
+            else:
+                c_emb = self.state_encoder(states)
+                c_mask = None
 
-        if hasattr(self.state_encoder, "forward_with_mask"):
-            c_emb, c_mask = self.state_encoder.forward_with_mask(states)
-        else:
-            c_emb = self.state_encoder(states)
-            c_mask = None
+            if hasattr(self.constraint_encoder, "forward_with_mask"):
+                k_emb, k_mask = self.constraint_encoder.forward_with_mask(target_cand)
+            else:
+                k_emb = self.constraint_encoder(target_cand)
+                k_mask = None
 
-        if hasattr(self.constraint_encoder, "forward_with_mask"):
-            k_emb, k_mask = self.constraint_encoder.forward_with_mask(target_cand)
-        else:
-            k_emb = self.constraint_encoder(target_cand)
-            k_mask = None
+            # 2. Pooling (Epistemic Sieve)
+            q_state = cast(BelnapState, self.q_mpa(q_emb, mask=q_mask))
+            c_state = cast(BelnapState, self.c_mpa(c_emb, mask=c_mask))
+            k_state = cast(BelnapState, self.k_mpa(k_emb, mask=k_mask))
 
-        # 2. Pooling (Epistemic Sieve)
-        q_state = cast(BelnapState, self.q_mpa(q_emb, mask=q_mask))
-        c_state = cast(BelnapState, self.c_mpa(c_emb, mask=c_mask))
-        k_state = cast(BelnapState, self.k_mpa(k_emb, mask=k_mask))
+            # 3. Cascaded Cross-Attention Reasoning Core
+            stage_names = ["post_pooling"]
+            stage_states = [q_state]
 
-        # 3. Cascaded Cross-Attention Reasoning Core
-        stage_names = ["post_pooling"]
-        stage_states = [q_state]
+            curr_state = q_state
+            for idx, layer in enumerate(self.reasoning_layers):
+                layer_dict = cast(nn.ModuleDict, layer)
+                context_block = cast(BelnapTransformerBlock, layer_dict["context"])
+                constraint_block = cast(BelnapTransformerBlock, layer_dict["constraint"])
+                curr_state = context_block(x=curr_state, context=c_state)
+                suffix = f"_{idx}" if len(self.reasoning_layers) > 1 else ""
+                stage_names.append(f"post_context{suffix}")
+                stage_states.append(curr_state)
 
-        curr_state = q_state
-        for idx, layer in enumerate(self.reasoning_layers):
-            layer_dict = cast(nn.ModuleDict, layer)
-            context_block = cast(BelnapTransformerBlock, layer_dict["context"])
-            constraint_block = cast(BelnapTransformerBlock, layer_dict["constraint"])
-            curr_state = context_block(x=curr_state, context=c_state)
-            suffix = f"_{idx}" if len(self.reasoning_layers) > 1 else ""
-            stage_names.append(f"post_context{suffix}")
-            stage_states.append(curr_state)
+                curr_state = constraint_block(x=curr_state, context=k_state)
+                stage_names.append(f"post_constraint{suffix}")
+                stage_states.append(curr_state)
 
-            curr_state = constraint_block(x=curr_state, context=k_state)
-            stage_names.append(f"post_constraint{suffix}")
-            stage_states.append(curr_state)
-
-        final_state = curr_state
+            final_state = curr_state
 
         if is_independent:
             head = self.scalar_head if self.num_choices != 1 else self.decision_head
-            # Pool per-candidate probe states to [B, D] and score candidates via
-            # bilinear query-candidate affinity (R4): eliminates the additive
-            # context term that cancels across candidates under linear scoring.
-            # Candidate features come from the masked mean of the raw candidate
-            # token embeddings (polarity split via a scaled sigmoid pair): the
-            # Belnap MPA evidence is reserved for the reasoning core because its
-            # sigmoid-bounded channels wash out per-candidate contrast, which
-            # the bilinear alignment needs at full strength.
-            k_mean_mask = k_mask.unsqueeze(-1).to(k_emb.dtype) if k_mask is not None else 1.0
-            k_token_mass = k_mean_mask.sum(dim=1).clamp(min=1.0)
-            k_pooled_raw = (k_emb * k_mean_mask).sum(dim=1) / k_token_mass
-            pooled_cand = BelnapState(
-                e_pos=torch.sigmoid(k_pooled_raw),
-                e_neg=torch.sigmoid(-k_pooled_raw),
-            )
+            # Score candidates via bilinear query-candidate affinity (R4): this
+            # eliminates the additive context term that cancels across candidates
+            # under linear scoring. Candidate features come from the masked mean
+            # of the raw candidate token embeddings (polarity split via a sigmoid
+            # pair): the Belnap MPA evidence is reserved for the reasoning core
+            # because its sigmoid-bounded channels wash out per-candidate
+            # contrast, which the bilinear alignment needs at full strength.
+            if self.use_context_cache:
+                pooled_cand = cached_cand_features
+            else:
+                k_mean_mask = k_mask.unsqueeze(-1).to(k_emb.dtype) if k_mask is not None else 1.0
+                k_token_mass = k_mean_mask.sum(dim=1).clamp(min=1.0)
+                k_pooled_raw = (k_emb * k_mean_mask).sum(dim=1) / k_token_mass
+                pooled_cand = BelnapState(
+                    e_pos=torch.sigmoid(k_pooled_raw),
+                    e_neg=torch.sigmoid(-k_pooled_raw),
+                )
             # Group-relative candidate scoring: candidates sharing an identical
             # (query, state, task) context form one decision group, and each
             # candidate is scored on its deviation from the group's mean
@@ -543,6 +563,222 @@ class YodaDecisionEngine(nn.Module):
             stage_states=stage_states,
             stage_names=stage_names,
         )
+
+    def clear_context_cache(self) -> None:
+        """Clears the memoized pooled context and candidate encodings."""
+        self._context_cache.clear()
+        self._candidate_cache.clear()
+
+    def _resolve_independent_mode(
+        self,
+        constraints: list[list[str]] | list[str] | None,
+        candidates: list[str] | None,
+    ) -> tuple[bool, list[str] | list[list[str]]]:
+        """Detects independent candidate evaluation and the target candidate batch."""
+        if candidates is not None:
+            return True, candidates
+        if constraints is not None:
+            flat = len(constraints) > 0 and isinstance(constraints[0], str)
+            independent = flat or self.num_choices == 1
+            return independent, constraints
+        return self.num_choices == 1, []
+
+    def _deduplicated_context_reasoning(
+        self,
+        queries: list[str],
+        states: list[dict[str, Any]],
+        target_cand: list[str] | list[list[str]],
+        task_scalars: torch.Tensor | None,
+    ) -> tuple[BelnapState, BelnapState, BelnapState, list[BelnapState], list[str]]:
+        """Runs encoding, pooling, and reasoning with per-context deduplication.
+
+        Candidates sharing an identical (query, state, task) context form one
+        group: their query and state texts are encoded once, pooled once, and
+        reasoned over once, then expanded back to every row. Under gradient-free
+        execution the pooled context states are additionally memoized in
+        `_context_cache` across calls.
+        """
+        keys = self._context_group_keys(queries, states, task_scalars)
+        unique_keys: list[tuple[str, str, float]] = []
+        key_position: dict[tuple[str, str, float], int] = {}
+        row_of_unique: list[int] = []
+        for key in keys:
+            pos = key_position.get(key)
+            if pos is None:
+                pos = len(unique_keys)
+                key_position[key] = pos
+                unique_keys.append(key)
+            row_of_unique.append(pos)
+
+        can_persist = self.use_context_cache and not torch.is_grad_enabled()
+        cached = [(k in self._context_cache) if can_persist else False for k in unique_keys]
+        miss_positions = [i for i, hit in enumerate(cached) if not hit]
+
+        q_state_u, c_state_u = self._pool_unique_contexts(
+            unique_keys, miss_positions, task_scalars, can_persist
+        )
+
+        device = q_state_u.e_pos.device
+        row_idx = torch.tensor(row_of_unique, device=device, dtype=torch.long)
+        q_state_rows = BelnapState(e_pos=q_state_u.e_pos[row_idx], e_neg=q_state_u.e_neg[row_idx])
+        c_state_rows = BelnapState(e_pos=c_state_u.e_pos[row_idx], e_neg=c_state_u.e_neg[row_idx])
+
+        k_state, cand_features = self._resolve_candidate_states(target_cand, can_persist)
+
+        logger.debug(
+            "architecture.yoda_decision_engine.context_dedup",
+            extra={
+                "batch_rows": len(queries),
+                "unique_contexts": len(unique_keys),
+                "cache_hits": len(unique_keys) - len(miss_positions),
+            },
+        )
+
+        # Reasoning core: layer 0's context block runs on unique rows, deeper
+        # blocks and every constraint block run per row.
+        stage_names = ["post_pooling"]
+        stage_states = [q_state_rows]
+        curr_state = q_state_rows
+        for idx, layer in enumerate(self.reasoning_layers):
+            layer_dict = cast(nn.ModuleDict, layer)
+            context_block = cast(BelnapTransformerBlock, layer_dict["context"])
+            constraint_block = cast(BelnapTransformerBlock, layer_dict["constraint"])
+            suffix = f"_{idx}" if len(self.reasoning_layers) > 1 else ""
+            if idx == 0:
+                curr_u = context_block(x=q_state_u, context=c_state_u)
+                curr_state = BelnapState(e_pos=curr_u.e_pos[row_idx], e_neg=curr_u.e_neg[row_idx])
+            else:
+                curr_state = context_block(x=curr_state, context=c_state_rows)
+            stage_names.append(f"post_context{suffix}")
+            stage_states.append(curr_state)
+
+            curr_state = constraint_block(x=curr_state, context=k_state)
+            stage_names.append(f"post_constraint{suffix}")
+            stage_states.append(curr_state)
+
+        return curr_state, k_state, cand_features, stage_states, stage_names
+
+    def _pool_unique_contexts(
+        self,
+        unique_keys: list[tuple[str, str, float]],
+        miss_positions: list[int],
+        task_scalars: torch.Tensor | None,
+        can_persist: bool,
+    ) -> tuple[BelnapState, BelnapState]:
+        """Pools unique (query, state) contexts, memoizing under gradient-free execution."""
+        q_state_u: BelnapState | None = None
+        c_state_u: BelnapState | None = None
+        if miss_positions:
+            # Single encoder pass over all uncached unique query and state texts
+            q_texts = [unique_keys[i][0] for i in miss_positions]
+            s_texts = [unique_keys[i][1] for i in miss_positions]
+            combined: list[str] = q_texts + s_texts
+            if hasattr(self.text_encoder, "forward_with_mask"):
+                emb_u, mask_u = self.text_encoder.forward_with_mask(combined)
+            else:
+                emb_u = self.text_encoder(combined)
+                mask_u = None
+            n_miss = len(miss_positions)
+            q_emb_u = emb_u[:n_miss]
+            q_mask_u = mask_u[:n_miss] if mask_u is not None else None
+            c_emb_u = emb_u[n_miss:]
+            c_mask_u = mask_u[n_miss:] if mask_u is not None else None
+
+            if task_scalars is not None:
+                tasks = torch.tensor(
+                    [[unique_keys[i][2]] for i in miss_positions],
+                    dtype=q_emb_u.dtype,
+                    device=q_emb_u.device,
+                )
+                task_vector = self.task_proj(tasks).unsqueeze(1)
+                q_emb_u = q_emb_u + task_vector
+
+            q_state_miss = cast(BelnapState, self.q_mpa(q_emb_u, mask=q_mask_u))
+            c_state_miss = cast(BelnapState, self.c_mpa(c_emb_u, mask=c_mask_u))
+            if can_persist:
+                for j, i in enumerate(miss_positions):
+                    self._context_cache[unique_keys[i]] = (
+                        BelnapState(
+                            e_pos=q_state_miss.e_pos[j].clone(),
+                            e_neg=q_state_miss.e_neg[j].clone(),
+                        ),
+                        BelnapState(
+                            e_pos=c_state_miss.e_pos[j].clone(),
+                            e_neg=c_state_miss.e_neg[j].clone(),
+                        ),
+                    )
+            else:
+                # Gradient mode computes every unique context fresh, in order
+                q_state_u = q_state_miss
+                c_state_u = c_state_miss
+
+        if can_persist:
+            # Assemble unique-order states from the now-complete cache
+            q_state_u = BelnapState(
+                e_pos=torch.stack([self._context_cache[k][0].e_pos for k in unique_keys]),
+                e_neg=torch.stack([self._context_cache[k][0].e_neg for k in unique_keys]),
+            )
+            c_state_u = BelnapState(
+                e_pos=torch.stack([self._context_cache[k][1].e_pos for k in unique_keys]),
+                e_neg=torch.stack([self._context_cache[k][1].e_neg for k in unique_keys]),
+            )
+
+        if q_state_u is None or c_state_u is None:
+            raise RuntimeError("Context deduplication requires pooled context states.")
+        return q_state_u, c_state_u
+
+    def _resolve_candidate_states(
+        self,
+        target_cand: list[str] | list[list[str]],
+        can_persist: bool,
+    ) -> tuple[BelnapState, BelnapState]:
+        """Encodes candidates and builds pooled k-states and head candidate features.
+
+        Candidates are distinct within a batch, but their pooled states and
+        features are memoized across gradient-free calls.
+        """
+        flat_cands: list[str] | None = None
+        if target_cand and isinstance(target_cand[0], str):
+            flat_cands = cast(list[str], target_cand)
+
+        if can_persist and flat_cands is not None:
+            cand_miss = [i for i, c in enumerate(flat_cands) if c not in self._candidate_cache]
+            if cand_miss:
+                emb_m, mask_m = self.constraint_encoder.forward_with_mask(
+                    [flat_cands[i] for i in cand_miss]
+                )
+                states_m = cast(BelnapState, self.k_mpa(emb_m, mask=mask_m))
+                mean_mask_m = mask_m.unsqueeze(-1).to(emb_m.dtype)
+                pooled_m = (emb_m * mean_mask_m).sum(dim=1) / mean_mask_m.sum(dim=1).clamp(min=1.0)
+                for j, i in enumerate(cand_miss):
+                    self._candidate_cache[flat_cands[i]] = (
+                        BelnapState(
+                            e_pos=states_m.e_pos[j].clone(),
+                            e_neg=states_m.e_neg[j].clone(),
+                        ),
+                        pooled_m[j].clone(),
+                    )
+            k_state = BelnapState(
+                e_pos=torch.stack([self._candidate_cache[c][0].e_pos for c in flat_cands]),
+                e_neg=torch.stack([self._candidate_cache[c][0].e_neg for c in flat_cands]),
+            )
+            pooled_cand_raw = torch.stack([self._candidate_cache[c][1] for c in flat_cands])
+        else:
+            if hasattr(self.constraint_encoder, "forward_with_mask"):
+                k_emb, k_mask = self.constraint_encoder.forward_with_mask(target_cand)
+            else:
+                k_emb = self.constraint_encoder(target_cand)
+                k_mask = None
+            k_state = cast(BelnapState, self.k_mpa(k_emb, mask=k_mask))
+            mean_mask = k_mask.unsqueeze(-1).to(k_emb.dtype) if k_mask is not None else 1.0
+            token_mass = mean_mask.sum(dim=1).clamp(min=1.0)
+            pooled_cand_raw = (k_emb * mean_mask).sum(dim=1) / token_mass
+
+        cand_features = BelnapState(
+            e_pos=torch.sigmoid(pooled_cand_raw),
+            e_neg=torch.sigmoid(-pooled_cand_raw),
+        )
+        return k_state, cand_features
 
     def _context_group_keys(
         self,

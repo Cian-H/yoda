@@ -166,6 +166,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Weight multiplier for task-conditioned LTN constraint loss",
     )
     parser.add_argument(
+        "--decisiveness-weight",
+        type=float,
+        default=0.1,
+        help="Target multiplier for the paraconsistent contradiction penalty (default: 0.1)",
+    )
+    parser.add_argument(
+        "--decisiveness-warmup-epochs",
+        type=int,
+        default=0,
+        help="Warmup epochs before the contradiction penalty reaches its target (default: 0)",
+    )
+    parser.add_argument(
         "--assertion-weight",
         type=float,
         default=0.1,
@@ -229,8 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--residual-weight",
         type=float,
-        default=0.5,
-        help="Interpolation weight alpha for convex combination residual joins (default: 0.5)",
+        default=0.15,
+        help="Interpolation weight alpha for convex combination residual joins (default: 0.15)",
     )
     parser.add_argument(
         "--dropout",
@@ -602,6 +614,8 @@ def main() -> None:
             lr=args.lr,
             belnap_weight=args.belnap_weight,
             ltn_weight=args.ltn_weight,
+            decisiveness_weight=args.decisiveness_weight,
+            decisiveness_warmup_epochs=args.decisiveness_warmup_epochs,
         )
         accelerator = "gpu" if device.type == "cuda" else "cpu"
         pl_trainer = pl.Trainer(
@@ -628,6 +642,8 @@ def main() -> None:
             lr_decay=args.lr_decay,
             belnap_weight=args.belnap_weight,
             ltn_weight=args.ltn_weight,
+            decisiveness_weight=args.decisiveness_weight,
+            decisiveness_warmup_epochs=args.decisiveness_warmup_epochs,
             assertion_weight=args.assertion_weight,
             margin_weight=args.margin_weight,
             independent_eval=args.independent_eval,

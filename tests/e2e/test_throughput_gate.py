@@ -60,6 +60,7 @@ def test_independent_candidate_evaluation_throughput_speedup() -> None:
         num_choices=1,
         n_heads=2,
         num_reasoning_blocks=1,
+        use_context_cache=False,
     )
 
     # Hardened cached engine

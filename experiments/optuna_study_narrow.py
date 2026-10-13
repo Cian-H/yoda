@@ -76,7 +76,7 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
         "num_q_probes": trial.suggest_int("num_q_probes", 4, 7),
         "d_hidden_multiplier": trial.suggest_float("d_hidden_multiplier", 1.4, 3.9),
         "belnap_weight": trial.suggest_float("belnap_weight", 0.75, 1.45),
-        "conflation_weight": trial.suggest_float("conflation_weight", 0.35, 0.50),
+        "conflation_weight": trial.suggest_float("conflation_weight", 0.01, 0.25, log=True),
         # Runtime settings
         "max_samples": args.max_samples,
         "epochs": args.epochs,

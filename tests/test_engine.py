@@ -591,3 +591,109 @@ class TestBilinearCandidateAlignment:
                 f"Unmentioned candidate {idx} knowledge must stay < 0.20, "
                 f"got {out['knowledge'][idx].item():.4f}"
             )
+
+
+class TestContextEncodingDeduplication:
+    """Verifies R5 context encoding deduplication and cross-call memoization."""
+
+    def test_deduplicated_outputs_match_uncached_engine(self) -> None:
+        """Cached and uncached engines must produce identical logits (to float noise)."""
+        torch.manual_seed(31)
+        uncached = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+            use_context_cache=False,
+        )
+        cached = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+        cached.load_state_dict(uncached.state_dict())
+        uncached.eval()
+        cached.eval()
+
+        queries = ["Shared question about pressure"] * 3
+        states = [{"system": "boiler"}] * 3
+        candidates = ["Vent valve", "Close valve", "Ignore alarm"]
+
+        with torch.no_grad():
+            out_uncached = uncached(queries=queries, states=states, candidates=candidates)
+            out_cached = cached(queries=queries, states=states, candidates=candidates)
+            out_warm = cached(queries=queries, states=states, candidates=candidates)
+
+        assert torch.allclose(out_uncached["logits"], out_cached["logits"], atol=1e-5)
+        assert torch.allclose(out_cached["logits"], out_warm["logits"], atol=1e-6), (
+            "Warm cache must return identical outputs"
+        )
+
+    def test_context_states_are_memoized_under_no_grad(self) -> None:
+        """Gradient-free forwards populate the context cache; repeated calls hit it."""
+        torch.manual_seed(32)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+        engine.eval()
+        queries = ["Dedup question"] * 2
+        states = [{"sensor": "active"}] * 2
+        candidates = ["Option A", "Option B"]
+
+        assert engine._context_cache == {}
+        with torch.no_grad():
+            engine(queries=queries, states=states, candidates=candidates)
+            assert len(engine._context_cache) == 1, "One unique context must be memoized"
+            engine(queries=queries, states=states, candidates=candidates)
+
+    def test_gradient_enabled_forward_invalidates_cache(self) -> None:
+        """A training (grad-enabled) forward must clear memoized context states."""
+        torch.manual_seed(33)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+        engine.eval()
+        queries = ["Invalidate question"] * 2
+        states = [{"mode": "test"}] * 2
+        candidates = ["Choice one", "Choice two"]
+
+        with torch.no_grad():
+            engine(queries=queries, states=states, candidates=candidates)
+        assert len(engine._context_cache) == 1
+
+        engine(queries=queries, states=states, candidates=candidates)  # grad enabled
+        assert engine._context_cache == {}, "Grad-enabled forward must invalidate the cache"
+
+    def test_independent_mode_encodes_contexts_once_per_batch(self) -> None:
+        """Unique (query, state) pairs share a single encoder pass per batch."""
+        from unittest.mock import MagicMock
+
+        torch.manual_seed(34)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+        engine.eval()
+        original_forward = engine.text_encoder.forward
+        mock_forward = MagicMock(side_effect=original_forward)
+        engine.text_encoder.forward = mock_forward
+
+        queries = ["Common query"] * 4
+        states: list[dict[str, Any]] = [{"env": "sim"}] * 4
+        candidates = ["Option 1", "Option 2", "Option 3", "Option 4"]
+
+        engine(queries=queries, states=states, candidates=candidates)
+
+        assert mock_forward.call_count <= 2, (
+            f"Query and state contexts should be encoded in one pass, "
+            f"called {mock_forward.call_count} times"
+        )

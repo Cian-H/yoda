@@ -43,10 +43,14 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
         "num_q_probes": trial.suggest_int("num_q_probes", 2, 8),
         "num_c_probes": trial.suggest_int("num_c_probes", 8, 32),
         "dropout": trial.suggest_float("dropout", 0.0, 0.3),
-        "conflation_weight": trial.suggest_float("conflation_weight", 0.0, 0.5),
-        "residual_weight": trial.suggest_float("residual_weight", 0.1, 0.9),
-        # 3. Training parameters
-        "lr": trial.suggest_float("lr", 1e-4, 5e-3, log=True),
+        # Hardened architecture bounds (R5): conflation prunes contradiction without
+        # eroding decisive evidence, and residual joins stay in the regime that
+        # preserves gradient highways through cascaded reasoning.
+        "conflation_weight": trial.suggest_float("conflation_weight", 0.01, 0.25, log=True),
+        "residual_weight": trial.suggest_float("residual_weight", 0.10, 0.25),
+        # 3. Training parameters (R5: stable [1e-5, 5e-4] regime prevents sigmoid
+        # saturation blowup under pre-activation normalization)
+        "lr": trial.suggest_float("lr", 1e-5, 5e-4, log=True),
         "backbone_lr": trial.suggest_float("backbone_lr", 1e-6, 1e-4, log=True),
         "t0_epochs": trial.suggest_int("t0_epochs", 1, 3),
         "t_mult": trial.suggest_int("t_mult", 1, 2),
@@ -54,6 +58,9 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
         # 4. Loss Weights
         "belnap_weight": trial.suggest_float("belnap_weight", 0.5, 2.0),
         "margin_weight": trial.suggest_float("margin_weight", 0.1, 1.0),
+        # Contradiction penalty with linear warmup (R2): bounded decisiveness range
+        "decisiveness_weight": trial.suggest_float("decisiveness_weight", 0.001, 0.05, log=True),
+        "decisiveness_warmup_epochs": trial.suggest_int("decisiveness_warmup_epochs", 1, 3),
         # 5. Fixed study runtime parameters
         "max_samples": args.max_samples,
         "epochs": args.epochs,
