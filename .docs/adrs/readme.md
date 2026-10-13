@@ -24,5 +24,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0015](./0015-dynamic-80-10-10-dataset-partitioning.md) | Dynamic 80/10/10 Dataset Partitioning and Slice Management | Accepted | 2026-10-05 |
 | [0016](./0016-hyperopt-module-and-optuna-harness.md) | Reusable Hyperparameter Optimization Module (yoda.hyperopt) | Accepted | 2026-10-08 |
 | [0017](./0017-decouple-latent-projection-from-belnap-mpa.md) | Decouple Latent Projection from Belnap Multihead Pooled Attention | Accepted | 2026-10-12 |
+| [0018](./0018-distributed-optuna-heartbeat-monitoring.md) | Distributed Optuna Heartbeat Monitoring | Accepted | 2026-10-13 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)
