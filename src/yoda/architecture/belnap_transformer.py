@@ -264,27 +264,41 @@ class BelnapFFN(nn.Module):
         self.d_hidden = d_hidden
         self.conflation_weight = conflation_weight
         self.dropout = nn.Dropout(dropout)
+        # Dual-channel projections: w_1 transforms own-polarity evidence, w_2 gates
+        # cross-polarity evidence, preserving the B4 bilattice structure.
         self.w_1 = nn.Linear(d_model, d_hidden)
         self.w_2 = nn.Linear(d_model, d_hidden)
         self.w_o1 = nn.Linear(d_hidden, d_model)
         self.w_o2 = nn.Linear(d_hidden, d_model)
+        # Tie output projection parameters across channels so both polarities share
+        # one transformation, guaranteeing strict negation equivariance:
+        # f(negate(x)) == negate(f(x)).
+        self.w_o2.weight = self.w_o1.weight
+        self.w_o2.bias = self.w_o1.bias
 
-        # Pre-sigmoid normalization (R2: Pre-Activation Normalization)
+        # Pre-sigmoid normalization (R2: Pre-Activation Normalization), tied
+        # across channels for the same equivariance guarantee.
         self.norm_pos = nn.LayerNorm(d_model)
         self.norm_neg = nn.LayerNorm(d_model)
+        self.norm_neg.weight = self.norm_pos.weight
+        self.norm_neg.bias = self.norm_pos.bias
 
     def forward(self, x: BelnapState) -> BelnapState:
-        """Transforms evidence through conflation and non-linear feature projection."""
+        """Transforms evidence through conflation and dual-channel feature projection."""
         # 1. Conflation operator resolves conflicting evidence
         x_res = x.conflate(self.conflation_weight)
 
-        # 2. Hidden expansion with smooth Mish activation
-        h_mid = nn.functional.mish(self.w_1(x_res.e_pos) + self.w_2(x_res.e_neg))
-        h_mid = self.dropout(h_mid)
+        # 2. Dual-channel hidden expansion with cross-polarity gating:
+        # own-polarity features flow through w_1, cross-polarity features gate
+        # through w_2, so neither polarity bottlenecks through a shared vector.
+        h_pos = nn.functional.mish(self.w_1(x_res.e_pos) + self.w_2(x_res.e_neg))
+        h_neg = nn.functional.mish(self.w_1(x_res.e_neg) + self.w_2(x_res.e_pos))
+        h_pos = self.dropout(h_pos)
+        h_neg = self.dropout(h_neg)
 
         # 3. Output projections bounded in [0, 1] with pre-sigmoid LayerNorm
-        e_ffn_pos = torch.sigmoid(self.norm_pos(self.w_o1(h_mid)))
-        e_ffn_neg = torch.sigmoid(self.norm_neg(self.w_o2(h_mid)))
+        e_ffn_pos = torch.sigmoid(self.norm_pos(self.w_o1(h_pos)))
+        e_ffn_neg = torch.sigmoid(self.norm_neg(self.w_o2(h_neg)))
 
         return BelnapState(e_pos=e_ffn_pos, e_neg=e_ffn_neg)
 

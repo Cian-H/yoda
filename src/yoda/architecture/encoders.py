@@ -1,10 +1,30 @@
 """Phase 1 input encoders for text, symbolic states, and constraints."""
 
+import zlib
 from typing import Any, Literal, cast, overload
 
 import torch
 from torch import nn
 from transformers import AutoModel, AutoTokenizer
+
+
+def _stable_token_ids(
+    texts: list[str],
+    seq_len: int,
+    num_embeddings: int,
+    device: torch.device | None,
+) -> torch.Tensor:
+    """Maps tokens to deterministic embedding indices via crc32 hashing.
+
+    Guarantees identical text encodes to identical embeddings across calls,
+    which is required for cache idempotence and for learning text-conditioned
+    affinity from the dummy backbone.
+    """
+    ids = torch.zeros(len(texts), seq_len, dtype=torch.long, device=device)
+    for i, text in enumerate(texts):
+        for j, token in enumerate(text.split()[:seq_len]):
+            ids[i, j] = zlib.crc32(token.encode("utf-8")) % num_embeddings
+    return ids
 
 
 class TextEncoder(nn.Module):
@@ -91,7 +111,7 @@ class TextEncoder(nn.Module):
                 return (empty_emb, empty_mask) if return_mask else empty_emb
 
             seq_len = max((len(t.split()) for t in texts), default=0) or 1
-            fake_ids = torch.randint(0, 1000, (batch_size, seq_len), device=dev)
+            fake_ids = _stable_token_ids(texts, seq_len, 1000, dev)
             emb = self.dummy_embed(fake_ids)
             if not return_mask:
                 return emb
@@ -132,6 +152,10 @@ class SymbolicStateEncoder(nn.Module):
     def __init__(self, text_encoder: TextEncoder) -> None:
         super().__init__()
         self.text_encoder = text_encoder
+
+    def format_state(self, state: dict[str, Any]) -> str:
+        """Formats a single state dictionary into its canonical text form."""
+        return self._format_dict(state)
 
     def _format_dict(self, state: dict[str, Any]) -> str:
         """Flattens a dictionary into a structured string."""

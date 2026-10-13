@@ -249,6 +249,42 @@ class TestBelnapFFN:
         # With dropout=0.5 in train mode, different dropout masks produce different activations
         assert not torch.allclose(train_out1.e_pos, train_out2.e_pos)
 
+    def test_ffn_negation_equivariance(self) -> None:
+        """Swapping input polarities must swap output polarities exactly."""
+        torch.manual_seed(21)
+        ffn = BelnapFFN(d_model=32, d_hidden=64)
+        ffn.eval()
+        x = BelnapState(e_pos=torch.rand(3, 4, 32), e_neg=torch.rand(3, 4, 32))
+
+        out_normal = ffn(x)
+        out_inverted = ffn(x.negate())
+
+        assert torch.allclose(out_inverted.e_pos, out_normal.e_neg, atol=1e-6), (
+            "f(negate(x)).e_pos must equal f(x).e_neg (negation equivariance)"
+        )
+        assert torch.allclose(out_inverted.e_neg, out_normal.e_pos, atol=1e-6), (
+            "f(negate(x)).e_neg must equal f(x).e_pos (negation equivariance)"
+        )
+
+    def test_ffn_dual_channels_preserve_polarity_distinction(self) -> None:
+        """Dual-channel projections must keep positive and negative outputs distinct."""
+        torch.manual_seed(22)
+        ffn = BelnapFFN(d_model=32, d_hidden=64)
+        x = BelnapState(e_pos=torch.ones(1, 1, 32) * 0.9, e_neg=torch.ones(1, 1, 32) * 0.1)
+
+        out = ffn(x)
+        assert not torch.allclose(out.e_pos, out.e_neg), (
+            "Own-polarity and cross-polarity channels must produce distinct evidence"
+        )
+
+    def test_ffn_shared_output_projection_tied(self) -> None:
+        """Output projection and normalization parameters are tied across channels."""
+        ffn = BelnapFFN(d_model=32, d_hidden=64)
+        assert ffn.w_o2.weight is ffn.w_o1.weight
+        assert ffn.w_o2.bias is ffn.w_o1.bias
+        assert ffn.norm_neg.weight is ffn.norm_pos.weight
+        assert ffn.norm_neg.bias is ffn.norm_pos.bias
+
 
 class TestBelnapTransformerBlock:
     """Verifies the unified Belnap Transformer Block with residual joins."""

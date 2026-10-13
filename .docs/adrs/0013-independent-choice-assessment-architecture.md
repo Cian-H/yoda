@@ -61,3 +61,6 @@ flowchart TD
 - **Pure Epistemic Grounding**: Evaluates the absolute truth ($t$) and knowledge ($k$) of a choice given context, preventing distractor artifacts.
 - **Simplified Engine**: Eradicates all `active_mask` and `-1e9` masking logic from the model architecture and DLA diagnostics.
 - **Supersedes**: ADR-0011 (Active Criteria Masking) is superseded by this architecture.
+- **Amended 2026-10-13**: The independent path's scalar head was replaced by centered
+  bilinear candidate alignment with group-relative scoring; see
+  [ADR-0019](./0019-centered-bilinear-candidate-alignment-and-group-relative-scoring.md).

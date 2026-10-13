@@ -489,3 +489,105 @@ def test_architecture_package_exports() -> None:
 
     assert hasattr(arch, "YodaDecisionEngine")
     assert hasattr(arch, "BelnapDecisionHead")
+
+
+class TestBilinearCandidateAlignment:
+    """Verifies R4 bilinear candidate-query alignment and group-relative scoring."""
+
+    def test_zero_affinity_rests_at_neither_evidence(self) -> None:
+        """Orthogonal query and candidate evidence produce zero choice evidence."""
+        d_model = 32
+        head = BelnapDecisionHead(d_model=d_model, num_choices=1)
+
+        q = torch.zeros(1, d_model)
+        q[0, : d_model // 2] = 1.0
+        c = torch.zeros(1, d_model)
+        c[0, d_model // 2 :] = 1.0
+        # Centered candidate coordinates are orthogonal to the query evidence
+        c_state = BelnapState(e_pos=c, e_neg=torch.zeros(1, d_model))
+
+        out = head(BelnapState(e_pos=q, e_neg=torch.zeros(1, d_model)), candidate_states=c_state)
+        assert out["knowledge"].item() < 0.05, (
+            f"Orthogonal alignment must rest at Neither, got k={out['knowledge'].item()}"
+        )
+
+    def test_candidate_information_mass_gates_logits(self) -> None:
+        """Zero-mass candidate evidence suppresses logits despite query evidence."""
+        head = BelnapDecisionHead(d_model=32, num_choices=1)
+        query = BelnapState(e_pos=torch.ones(2, 32), e_neg=torch.zeros(2, 32))
+        # Candidate 0 carries contrast; candidate 1 sits at the evidence midpoint
+        cand = BelnapState(
+            e_pos=torch.tensor([[1.0] * 32, [0.5] * 32]),
+            e_neg=torch.tensor([[0.0] * 32, [0.5] * 32]),
+        )
+
+        out = head(query, candidate_states=cand)
+        assert abs(out["logits"][1].item()) < 1e-4, "Midpoint candidate must be suppressed"
+        assert out["logits"][0].item() > out["logits"][1].item()
+
+    def test_logit_scale_amplifies_ranking_signal(self) -> None:
+        """logit_scale multiplies bilinear logits without touching evidence bounds."""
+        head = BelnapDecisionHead(d_model=32, num_choices=1, logit_scale=4.0)
+        query = BelnapState(e_pos=torch.ones(1, 32), e_neg=torch.zeros(1, 32))
+        cand = BelnapState(e_pos=torch.ones(1, 32), e_neg=torch.zeros(1, 32))
+
+        out = head(query, candidate_states=cand)
+        assert out["logits"].item() > 0.5
+        assert out["choice_pos"].max().item() <= 1.0
+        assert out["choice_neg"].max().item() <= 1.0
+
+    def test_engine_independent_mode_ranks_within_group(self) -> None:
+        """Engine scores candidates group-relative: distinct candidates get distinct logits."""
+        torch.manual_seed(7)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+
+        queries = ["Which action is safest?"] * 2
+        states = [{"system": "boiler"}] * 2
+        candidates = ["Vent valve", "Close valve"]
+
+        out = engine(queries=queries, states=states, candidates=candidates)
+        assert out["logits"].shape == (2,)
+        assert not torch.allclose(out["logits"][0:1], out["logits"][1:2]), (
+            "Candidates sharing a context must receive group-relative distinct scores"
+        )
+
+    def test_engine_single_candidate_group_avoids_collapse(self) -> None:
+        """Single-candidate groups keep raw evidence (no dimensional collapse)."""
+        torch.manual_seed(8)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+
+        out = engine(queries=["Solo query"], states=[{"id": 1}], candidates=["Only option"])
+        assert out["logits"].shape == (1,)
+        assert torch.isfinite(out["logits"]).all()
+        assert out["knowledge"].shape == (1,)
+
+    def test_engine_unmentioned_candidates_stay_near_neither(self) -> None:
+        """Unmentioned candidates retain k < 0.20 at initialization."""
+        torch.manual_seed(11)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_choices=1,
+            n_heads=2,
+        )
+
+        out = engine(
+            queries=["Select active navigation route."] * 3,
+            states=[{"route_a": "clear"}] * 3,
+            candidates=["Route A: active", "Route X: unmentioned", "Route Y: unmentioned"],
+        )
+        for idx in (1, 2):
+            assert out["knowledge"][idx].item() < 0.20, (
+                f"Unmentioned candidate {idx} knowledge must stay < 0.20, "
+                f"got {out['knowledge'][idx].item():.4f}"
+            )

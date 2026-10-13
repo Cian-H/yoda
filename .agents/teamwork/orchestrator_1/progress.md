@@ -11,8 +11,8 @@ Current iteration: 1 / 32
 - [x] E2E Testing Track: Requirements-Driven Test Harness & Suites (Completed — TEST_READY.md published)
 - [x] Milestone 1: Phase 1 Architectural Hardening (R1 & R2) (COMPLETED — Gate PASSED, 271 unit tests clean, audit CLEAN)
 - [x] Milestone 2: Phase 2 NeSy Reformulation & Epistemic Logits (R3) (COMPLETED — Gate PASSED by Mistral continuation 2026-10-13; unit suite 387/387, ruff clean; Tier-4 epistemic calibration gate deferred to M3 wiring)
-- [ ] Milestone 3: Phase 3 Bilinear Head & Negation Equivariance (R4) (IN_PROGRESS — Mistral continuation)
-- [ ] Milestone 4: Phase 4 Context Deduplication & Sweep (R5) (PENDING — Mistral continuation)
+- [x] Milestone 3: Phase 3 Bilinear Head & Negation Equivariance (R4) (COMPLETED — Mistral continuation 2026-10-13; accuracy ceiling gate 75% > 60% across seeds, paraconsistent k <= 0.011, gradient health 10 seeds, all R4 tier gates green)
+- [ ] Milestone 4: Phase 4 Context Deduplication & Sweep (R5) (IN_PROGRESS — Mistral continuation)
 - [ ] Final Milestone: 100% E2E Pass & Adversarial Coverage Hardening
 
 ## Active Dispatches

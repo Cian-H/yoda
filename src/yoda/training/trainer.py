@@ -449,7 +449,10 @@ class YodaTrainer:
         batch: dict[str, Any],
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Computes joint Focal-Margin loss, Belnap loss, LTN loss, and batch accuracy metrics."""
-        if self.independent_eval and "candidates" in batch and "candidate_queries" in batch:
+        model_num_choices = getattr(self.model, "num_choices", None)
+        if "candidates" in batch and "candidate_queries" in batch and (
+            self.independent_eval or model_num_choices == 1
+        ):
             return self._compute_independent_loss_and_metrics(batch)
         return self._compute_legacy_loss_and_metrics(batch)
 
@@ -646,9 +649,11 @@ class YodaTrainer:
                 "ltn_loss": 0.0,
                 "assertion_loss": 0.0,
                 "accuracy": 0.0,
+                "eval_accuracy": 0.0,
                 "mean_knowledge": 0.0,
             }
 
+        accuracy = total_correct / total_samples
         return {
             "loss": total_loss / total_samples,
             "ce_loss": total_ce_loss / total_samples,
@@ -657,7 +662,8 @@ class YodaTrainer:
             "belnap_loss": total_belnap_loss / total_samples,
             "ltn_loss": total_ltn_loss / total_samples,
             "assertion_loss": total_assertion_loss / total_samples,
-            "accuracy": total_correct / total_samples,
+            "accuracy": accuracy,
+            "eval_accuracy": accuracy,
             "mean_knowledge": total_knowledge / total_samples,
         }
 
@@ -702,6 +708,7 @@ class YodaTrainer:
         train_loader: DataLoader[dict[str, Any]],
         eval_loader: DataLoader[dict[str, Any]] | None = None,
         epochs: int = 2,
+        val_loader: DataLoader[dict[str, Any]] | None = None,
     ) -> list[dict[str, float]]:
         """Trains the model across multiple epochs and evaluates validation metrics.
 
@@ -709,10 +716,13 @@ class YodaTrainer:
             train_loader: DataLoader for training steps.
             eval_loader: Optional DataLoader for validation metrics after each epoch.
             epochs: Number of training epochs to execute.
+            val_loader: Optional alias for `eval_loader`.
 
         Returns:
             List of per-epoch metric dictionaries.
         """
+        if eval_loader is None:
+            eval_loader = val_loader
         history: list[dict[str, float]] = []
         self._setup_schedulers(train_loader)
 

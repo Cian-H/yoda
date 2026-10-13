@@ -23,5 +23,12 @@ candidates retain k < 0.20) exercises the bilinear candidate-affinity head path 
 wires into independent evaluation; at M2 close-out the independent path still called the head
 without candidate states. Deferred to the M3 commit by design, not an M2 regression.
 
-## Milestone 3 (Phase 3 Bilinear Head & Negation Equivariance: R4) — assigned to Mistral
+## Milestone 3 (Phase 3 Bilinear Head & Negation Equivariance: R4) — Iteration 1
+
+Gate Result: **PASS** (Mistral continuation, 2026-10-13): accuracy ceiling gate 75% > 60%
+(verified across 6 init seeds), paraconsistent calibration gate k <= 0.011 < 0.20,
+gradient health gate across 10 seeds, negation equivariance exact, 401 unit tests,
+ruff clean.
+
+## Milestone 4 (Phase 4 Context Deduplication & Sweep: R5) — assigned to Mistral
 ## Milestone 4 (Phase 4 Context Deduplication & Sweep: R5) — assigned to Mistral

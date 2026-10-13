@@ -169,6 +169,28 @@ def test_architecture_package_exports() -> None:
     assert hasattr(arch, "ConstraintEncoder")
 
 
+def test_text_encoder_dummy_deterministic_encoding() -> None:
+    """Identical text must encode to identical embeddings across calls (stable hash)."""
+    encoder = TextEncoder("dummy", target_dim=32)
+    texts = ["pressure is high", "vent the valve", "pressure is high"]
+
+    out1 = encoder(texts)
+    out2 = encoder(texts)
+
+    assert torch.allclose(out1[0], out2[0]), "Same text must produce identical embeddings"
+    assert torch.allclose(out1[2], out2[2]), "Repeated text must produce identical embeddings"
+    assert not torch.allclose(out1[0], out1[1]), "Different text must produce different embeddings"
+
+
+def test_text_encoder_dummy_distinct_tokens_map_distinctly() -> None:
+    """Distinct tokens must map to distinct embedding rows via stable hashing."""
+    encoder = TextEncoder("dummy", target_dim=32)
+    out = encoder(["alpha beta", "gamma delta"])
+
+    assert not torch.allclose(out[0, 0], out[0, 1]), "Distinct tokens need distinct embeddings"
+    assert not torch.allclose(out[0, 0], out[1, 0]), "Distinct tokens need distinct embeddings"
+
+
 def test_text_encoder_forward_with_mask_dummy() -> None:
     """Verifies TextEncoder.forward_with_mask returns valid embeddings and boolean mask."""
     encoder = TextEncoder("dummy", target_dim=32)

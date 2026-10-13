@@ -118,6 +118,7 @@ def test_belnap_mpa_raw_tensor_input() -> None:
 
 def test_belnap_mpa_masking() -> None:
     """Verifies that attention masks suppress masked positions."""
+    torch.manual_seed(0)
     batch_size = 1
     seq_len = 4
     embed_dim = 16
@@ -125,8 +126,11 @@ def test_belnap_mpa_masking() -> None:
 
     mpa = BelnapMultiheadPooledAttention(embed_dim=embed_dim, num_queries=num_queries)
 
-    # First 2 tokens have knowledge, last 2 tokens have knowledge
-    e_pos = torch.ones(batch_size, seq_len, embed_dim) * 0.8
+    # Non-uniform evidence: masked positions must carry distinct content for the
+    # normalized aggregate to change when they are suppressed.
+    e_pos = torch.tensor(
+        [[[0.8] * embed_dim, [0.6] * embed_dim, [0.2] * embed_dim, [0.1] * embed_dim]]
+    )
     e_neg = torch.zeros(batch_size, seq_len, embed_dim)
     kv_state = BelnapState(e_pos=e_pos, e_neg=e_neg)
 

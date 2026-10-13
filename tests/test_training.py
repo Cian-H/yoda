@@ -817,6 +817,65 @@ class TestYodaTrainer:
         assert pytest.approx(loss_other.item(), rel=1e-5) == loss.item()
         assert metrics_other["focal_loss"] != metrics["focal_loss"]
 
+    def test_trainer_auto_dispatches_independent_batches_for_single_choice_models(
+        self,
+    ) -> None:
+        """A num_choices == 1 engine must use the independent path without the flag."""
+        torch.manual_seed(42)
+        engine = YodaDecisionEngine(
+            text_model_name="dummy",
+            embed_dim=32,
+            num_q_probes=2,
+            num_c_probes=4,
+            num_k_probes=2,
+            num_choices=1,
+            n_heads=2,
+        )
+        engine.eval()
+        trainer = YodaTrainer(model=engine, device="cpu")
+        batch = {
+            "queries": ["Q1", "Q2"],
+            "states": [{"k": 1}, {"k": 2}],
+            "constraints": [["c1", "c2"], ["c3", "c4"]],
+            "target_indices": torch.tensor([0, 1]),
+            "task_scalars": torch.tensor([[1.0], [1.0]]),
+            "candidates": ["c1", "c2", "c3", "c4"],
+            "candidate_queries": ["Q1", "Q1", "Q2", "Q2"],
+            "candidate_states": [{"k": 1}, {"k": 1}, {"k": 2}, {"k": 2}],
+            "candidate_labels": torch.tensor([1.0, 0.0, 0.0, 1.0]),
+            "candidate_group_ids": torch.tensor([0, 0, 1, 1]),
+            "candidate_task_scalars": torch.tensor([[1.0], [1.0], [1.0], [1.0]]),
+        }
+        torch.manual_seed(123)
+        loss, metrics = trainer._compute_loss_and_metrics(batch)
+
+        assert loss.item() > 0.0
+        assert metrics["total"] == 2.0, "Independent path must count question groups"
+
+    def test_trainer_fit_accepts_val_loader_alias(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        """fit(val_loader=...) must behave identically to fit(eval_loader=...)."""
+        dummy_engine.eval()
+        loader: DataLoader[dict[str, Any]] = DataLoader([], collate_fn=lambda x: x)  # type: ignore[arg-type,assignment]
+        trainer = YodaTrainer(model=dummy_engine, device="cpu", use_scheduler=False)
+        history = trainer.fit(train_loader=loader, val_loader=loader, epochs=1)
+        assert len(history) == 1
+        assert "eval_loss" in history[0], "val_loader alias must drive per-epoch evaluation"
+
+    def test_trainer_evaluate_exposes_eval_accuracy_key(
+        self,
+        dummy_engine: YodaDecisionEngine,
+    ) -> None:
+        """evaluate() must expose eval_accuracy (the sweep metric name) alongside accuracy."""
+        loader = DataLoader([], collate_fn=lambda x: x)  # type: ignore[arg-type,assignment]
+        dummy_engine.eval()
+        trainer = YodaTrainer(model=dummy_engine, device="cpu")
+        metrics = trainer.evaluate(loader)
+        assert "eval_accuracy" in metrics
+        assert metrics["eval_accuracy"] == metrics["accuracy"]
+
     def test_trainer_differential_lr(self, dummy_engine: YodaDecisionEngine) -> None:
         """Verifies YodaTrainer creates two param groups with correct LRs and assigns
         text_encoder.model params.

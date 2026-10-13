@@ -33,6 +33,7 @@ class BelnapDecisionHead(nn.Module):
         self,
         d_model: int,
         num_choices: int = 5,
+        logit_scale: float = 8.0,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -41,12 +42,18 @@ class BelnapDecisionHead(nn.Module):
         Args:
             d_model: Dimensionality of evidence representation.
             num_choices: Number of discrete decision choices.
+            logit_scale: Amplification applied to bilinear candidate-alignment
+                logits. The evidence channels keep their paraconsistent
+                magnitudes (unmentioned candidates rest at Neither), while the
+                ranking logits operate at a trainable scale so grouped
+                focal/margin losses receive useful gradients from step one.
             device: Target execution device.
             dtype: Target execution data type.
         """
         super().__init__()
         self.d_model = d_model
         self.num_choices = num_choices
+        self.logit_scale = float(logit_scale)
         self.w_pos = nn.Linear(d_model, num_choices, device=device, dtype=dtype)
         self.w_neg = nn.Linear(d_model, num_choices, device=device, dtype=dtype)
 
@@ -82,15 +89,18 @@ class BelnapDecisionHead(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """Projects dual evidence states into decision logits and coordinates.
 
-        If candidate_states is provided (shape: [batch_size, num_choices, d_model]),
-        computes pairwise candidate-level alignment scores to eliminate static index bias.
-        Otherwise falls back to linear projection heads over pooled evidence.
+        If candidate_states is provided (shape: [batch_size, num_choices, d_model] or
+        [batch_size, d_model]), computes bilinear candidate-level alignment scores on
+        centered truth-order evidence coordinates to eliminate static index bias and
+        additive context cancellation. Zero-affinity candidates rest at Neither (0, 0)
+        evidence, and logits are gated by candidate knowledge. Otherwise falls back to
+        linear projection heads over pooled evidence with knowledge-synchronized logits.
 
         Args:
             x: Input BelnapState of shape `(batch_size, num_queries, d_model)` or
                 `(batch_size, d_model)`.
             candidate_states: Optional per-candidate BelnapState of shape
-                `(batch_size, num_choices, d_model)`.
+                `(batch_size, num_choices, d_model)` or `(batch_size, d_model)`.
 
         Returns:
             Dictionary containing:
@@ -100,41 +110,47 @@ class BelnapDecisionHead(nn.Module):
                 `(batch_size, num_choices)`.
             - `choice`: Selected choice indices of shape `(batch_size,)`.
         """
-        if x.e_pos.dim() == 3:
-            pooled_pos = x.e_pos.mean(dim=1)
-            pooled_neg = x.e_neg.mean(dim=1)
-        else:
-            pooled_pos = x.e_pos
-            pooled_neg = x.e_neg
-
-        scale = self.d_model**0.5
+        pooled_pos = x.e_pos.mean(dim=1) if x.e_pos.dim() == 3 else x.e_pos
+        pooled_neg = x.e_neg.mean(dim=1) if x.e_neg.dim() == 3 else x.e_neg
 
         if candidate_states is not None:
-            # Pairwise candidate alignment scoring
+            # Bilinear candidate alignment scoring. The query contributes raw
+            # evidence mass (confidence weighting) while the candidate contributes
+            # centered truth-order signal eps = 2e - 1 in [-1, 1]: neutral
+            # (Neither-ish) candidate evidence ~0.5 maps to ~0, so unmentioned
+            # candidates produce zero alignment signal instead of positive
+            # magnitude inflation, while decisive candidates (eps -> +-1)
+            # transmit full affinity.
             if candidate_states.e_pos.dim() == 2:
                 # 2D candidate states: [B, D] (e.g. scalar head evaluation)
-                q_p = self.cand_query_pos(pooled_pos)            # [B, D]
-                q_n = self.cand_query_neg(pooled_neg)            # [B, D]
-                c_p = self.cand_opt_pos(candidate_states.e_pos)  # [B, D]
-                c_n = self.cand_opt_neg(candidate_states.e_neg)  # [B, D]
+                q_p = self.cand_query_pos(pooled_pos)  # [B, D]
+                q_n = self.cand_query_neg(pooled_neg)  # [B, D]
+                c_p = self.cand_opt_pos(2.0 * candidate_states.e_pos - 1.0)  # [B, D]
+                c_n = self.cand_opt_neg(2.0 * candidate_states.e_neg - 1.0)  # [B, D]
 
+                scale = self.d_model**0.5
                 pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale  # [B]
                 neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale  # [B]
-
-                cand_k = (candidate_states.e_pos + candidate_states.e_neg).mean(dim=-1) / 2.0  # [B]
+                # Information mass of the candidate evidence: identical to the
+                # knowledge coordinate for raw [0, 1] evidence, and equal to the
+                # contrast magnitude for group-centered candidate features.
+                cand_k = (candidate_states.e_pos.abs() + candidate_states.e_neg.abs()).mean(
+                    dim=-1
+                ) / 2.0
                 raw_diff = pos_affinity - neg_affinity
             else:
                 # 3D candidate states: [B, num_choices, D]
                 q_p = self.cand_query_pos(pooled_pos).unsqueeze(1)  # [B, 1, D]
                 q_n = self.cand_query_neg(pooled_neg).unsqueeze(1)  # [B, 1, D]
-                c_p = self.cand_opt_pos(candidate_states.e_pos)     # [B, num_choices, D]
-                c_n = self.cand_opt_neg(candidate_states.e_neg)     # [B, num_choices, D]
+                c_p = self.cand_opt_pos(2.0 * candidate_states.e_pos - 1.0)  # [B, num_choices, D]
+                c_n = self.cand_opt_neg(2.0 * candidate_states.e_neg - 1.0)  # [B, num_choices, D]
 
-                pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale  # [B, num_choices]
-                neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale  # [B, num_choices]
-
-                # [B, num_choices]
-                cand_k = (candidate_states.e_pos + candidate_states.e_neg).mean(dim=-1) / 2.0
+                scale = self.d_model**0.5
+                pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale
+                neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale
+                cand_k = (candidate_states.e_pos.abs() + candidate_states.e_neg.abs()).mean(
+                    dim=-1
+                ) / 2.0
                 raw_diff = pos_affinity - neg_affinity
                 if self.num_choices == 1 and raw_diff.size(-1) == 1:
                     pos_affinity = pos_affinity.squeeze(-1)
@@ -142,10 +158,21 @@ class BelnapDecisionHead(nn.Module):
                     raw_diff = raw_diff.squeeze(-1)
                     cand_k = cand_k.squeeze(-1)
 
+            # Epistemic gate from candidate knowledge: zero-knowledge candidates
+            # cannot produce confident logits.
             cand_gate = (2.0 * cand_k).clamp(max=1.0)
-            choice_pos = torch.sigmoid(pos_affinity) * cand_gate
-            choice_neg = torch.sigmoid(neg_affinity) * cand_gate
+            # Alignment evidence: zero affinity rests at Neither (0, 0) instead of
+            # the contradictory Both midpoint, so unmentioned candidates carry
+            # k -> 0 without false support or refutation. The sigmoid-weighted
+            # tanh magnitude keeps gradients alive on both affinity signs: the
+            # dominant channel encodes the polarity, the off-channel stays small.
+            choice_pos = torch.sigmoid(pos_affinity) * torch.tanh(pos_affinity).abs() * cand_gate
+            choice_neg = torch.sigmoid(neg_affinity) * torch.tanh(neg_affinity).abs() * cand_gate
 
+            choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
+            truth = choice_state.truth
+            knowledge = choice_state.knowledge
+            logits = raw_diff * cand_gate * self.logit_scale
         elif self.num_choices == 1:
             raw_pos = self.w_pos(pooled_pos).squeeze(-1)  # [B]
             raw_neg = self.w_neg(pooled_neg).squeeze(-1)  # [B]
@@ -156,6 +183,10 @@ class BelnapDecisionHead(nn.Module):
             choice_pos = torch.sigmoid(raw_pos) * cand_gate
             choice_neg = torch.sigmoid(raw_neg) * cand_gate
 
+            choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
+            truth = choice_state.truth
+            knowledge = choice_state.knowledge
+            logits = raw_diff * knowledge
         else:
             raw_pos = self.w_pos(pooled_pos)  # [B, num_choices]
             raw_neg = self.w_neg(pooled_neg)  # [B, num_choices]
@@ -166,12 +197,10 @@ class BelnapDecisionHead(nn.Module):
             choice_pos = torch.sigmoid(raw_pos) * cand_gate
             choice_neg = torch.sigmoid(raw_neg) * cand_gate
 
-        choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
-        truth = choice_state.truth
-        knowledge = choice_state.knowledge
-
-        # Epistemic synchronization: logits gated by candidate knowledge coordinate
-        logits = raw_diff * knowledge
+            choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
+            truth = choice_state.truth
+            knowledge = choice_state.knowledge
+            logits = raw_diff * knowledge
 
         if self.num_choices == 1 or logits.dim() == 1:
             choice = (logits > 0).long()
@@ -455,9 +484,37 @@ class YodaDecisionEngine(nn.Module):
 
         if is_independent:
             head = self.scalar_head if self.num_choices != 1 else self.decision_head
-            final_out = head(final_state)
+            # Pool per-candidate probe states to [B, D] and score candidates via
+            # bilinear query-candidate affinity (R4): eliminates the additive
+            # context term that cancels across candidates under linear scoring.
+            # Candidate features come from the masked mean of the raw candidate
+            # token embeddings (polarity split via a scaled sigmoid pair): the
+            # Belnap MPA evidence is reserved for the reasoning core because its
+            # sigmoid-bounded channels wash out per-candidate contrast, which
+            # the bilinear alignment needs at full strength.
+            k_mean_mask = k_mask.unsqueeze(-1).to(k_emb.dtype) if k_mask is not None else 1.0
+            k_token_mass = k_mean_mask.sum(dim=1).clamp(min=1.0)
+            k_pooled_raw = (k_emb * k_mean_mask).sum(dim=1) / k_token_mass
+            pooled_cand = BelnapState(
+                e_pos=torch.sigmoid(k_pooled_raw),
+                e_neg=torch.sigmoid(-k_pooled_raw),
+            )
+            # Group-relative candidate scoring: candidates sharing an identical
+            # (query, state, task) context form one decision group, and each
+            # candidate is scored on its deviation from the group's mean
+            # candidate evidence. This removes the candidate-common plausibility
+            # direction that otherwise satisfies per-candidate evidence targets
+            # without discriminating within the group (the 50% ceiling). Single
+            # candidate groups keep their raw evidence to avoid collapse.
+            cand_state = self._center_candidate_states(
+                pooled_cand,
+                queries=queries,
+                states=states,
+                task_scalars=task_scalars,
+            )
+            final_out = head(final_state, candidate_states=cand_state)
             if return_diagnostics:
-                probe_outs = [head(s) for s in stage_states]
+                probe_outs = [head(s, candidate_states=cand_state) for s in stage_states]
                 stage_logits = torch.stack([p["logits"] for p in probe_outs], dim=0)
                 stage_knowledge = torch.stack([p["knowledge"] for p in probe_outs], dim=0)
                 stage_truth = torch.stack([p["truth"] for p in probe_outs], dim=0)
@@ -486,6 +543,69 @@ class YodaDecisionEngine(nn.Module):
             stage_states=stage_states,
             stage_names=stage_names,
         )
+
+    def _context_group_keys(
+        self,
+        queries: list[str],
+        states: list[dict[str, Any]],
+        task_scalars: torch.Tensor | None,
+    ) -> list[tuple[str, str, float]]:
+        """Builds per-row keys identifying the shared (query, state, task) context."""
+        if task_scalars is not None:
+            tasks = [float(t) for t in task_scalars.reshape(-1).tolist()]
+        else:
+            tasks = [0.0] * len(queries)
+        return [
+            (q, self.state_encoder.format_state(s), t)
+            for q, s, t in zip(queries, states, tasks, strict=False)
+        ]
+
+    def _center_candidate_states(
+        self,
+        cand_state: BelnapState,
+        queries: list[str],
+        states: list[dict[str, Any]],
+        task_scalars: torch.Tensor | None,
+    ) -> BelnapState:
+        """Centers candidate evidence against the group mean per shared context.
+
+        Candidates evaluated under an identical (query, state, task) context form
+        one decision group; each candidate's evidence is replaced by its
+        deviation from the group mean so bilinear scoring ranks candidates on
+        their distinctive signal. Single-candidate groups keep raw evidence.
+        """
+        if cand_state.e_pos.size(0) <= 1:
+            return cand_state
+        keys = self._context_group_keys(queries, states, task_scalars)
+        group_members: dict[tuple[str, str, float], list[int]] = {}
+        for idx, key in enumerate(keys):
+            group_members.setdefault(key, []).append(idx)
+
+        device = cand_state.e_pos.device
+        pos = cand_state.e_pos.clone()
+        neg = cand_state.e_neg.clone()
+        for members in group_members.values():
+            if len(members) > 1:
+                rows = torch.tensor(members, device=device, dtype=torch.long)
+                # The +0.5 evidence midpoint offset restores the [0, 1] evidence
+                # range: the head's centered coordinates eps = 2e - 1 cancel the
+                # offset exactly (recovering the pure group deviation), while the
+                # candidate knowledge gate reads the restored information mass.
+                pos[rows] = (
+                    cand_state.e_pos[rows] - cand_state.e_pos[rows].mean(dim=0, keepdim=True) + 0.5
+                )
+                neg[rows] = (
+                    cand_state.e_neg[rows] - cand_state.e_neg[rows].mean(dim=0, keepdim=True) + 0.5
+                )
+        logger.debug(
+            "architecture.yoda_decision_engine.group_relative_scoring",
+            extra={
+                "batch_rows": int(cand_state.e_pos.size(0)),
+                "num_groups": len(group_members),
+                "multi_candidate_groups": sum(1 for m in group_members.values() if len(m) > 1),
+            },
+        )
+        return BelnapState(e_pos=pos, e_neg=neg)
 
     def _resolve_cand_states(
         self,

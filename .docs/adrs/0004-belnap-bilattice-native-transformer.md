@@ -28,7 +28,10 @@ We design and implement a native Belnap Bilattice Transformer in `src/yoda/archi
 
 3. **Bilattice Feed-Forward Network (`BelnapFFN`)**:
    - Embeds the conflation operator to prune mutual cross-polarity ambiguity: $\mathbf{e}_{\text{res}}^+ = \text{ReLU}(\mathbf{e}^+ - \lambda \mathbf{e}^-)$.
-   - Expands features non-linearly with GELU and projects back to bounded dual evidence $[0, 1]$.
+   - Expands features non-linearly and projects back to bounded dual evidence $[0, 1]$.
+   - Maintains dual hidden channels with cross-polarity gating and tied output
+     parameters, guaranteeing strict negation equivariance
+     $f(\text{negate}(x)) = \text{negate}(f(x))$ (ADR-0020).
 
 4. **Multi-Branch Ingestion & Decision Readout (`BelnapDecisionTransformer`)**:
    - Parses `DecisionPayload` fields in Python into dedicated tensor pathways (dense query projection, structured state tokens, candidate choice embeddings).
