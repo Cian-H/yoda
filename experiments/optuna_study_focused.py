@@ -87,6 +87,8 @@ def objective(trial: optuna.Trial, args: argparse.Namespace) -> float:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "early_stopping_patience": args.early_stopping_patience,
+        "collapse_threshold": args.collapse_threshold,
+        "collapse_patience_epochs": args.collapse_patience_epochs,
     }
 
     if args.train_path:

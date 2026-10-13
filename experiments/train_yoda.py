@@ -283,6 +283,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of epochs without eval loss improvement before stopping training early",
     )
+    parser.add_argument(
+        "--collapse-threshold",
+        type=float,
+        default=None,
+        help="Accuracy floor below which training terminates early if stuck in collapse",
+    )
+    parser.add_argument(
+        "--collapse-patience-epochs",
+        type=int,
+        default=2,
+        help="Number of epochs before collapse pruning is enforced (default: 2)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     return parser
 
@@ -624,6 +636,8 @@ def main() -> None:
             device=device,
             precision=args.precision,
             early_stopping_patience=args.early_stopping_patience,
+            collapse_threshold=args.collapse_threshold,
+            collapse_patience_epochs=args.collapse_patience_epochs,
         )
 
         logger.info("Starting {}-epoch training run with native YodaTrainer...", args.epochs)

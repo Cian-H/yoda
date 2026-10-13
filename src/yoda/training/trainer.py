@@ -96,6 +96,8 @@ class YodaTrainer:
         device: str | torch.device = "cpu",
         precision: str = "float32",
         early_stopping_patience: int | None = None,
+        collapse_threshold: float | None = None,
+        collapse_patience_epochs: int = 2,
     ) -> None:
         """Initializes YodaTrainer.
 
@@ -125,6 +127,9 @@ class YodaTrainer:
             device: Target execution device.
             precision: Arithmetic precision mode ('float32', 'bfloat16', or 'float16').
             early_stopping_patience: Number of epochs with no eval loss improvement before stopping.
+            collapse_threshold: Accuracy floor below which training terminates early if stuck.
+            collapse_patience_epochs: Number of epochs before collapse pruning is enforced
+                (default: 2).
         """
         self.device = torch.device(device) if isinstance(device, str) else device
         self.precision = str(precision).lower()
@@ -139,6 +144,10 @@ class YodaTrainer:
         self.early_stopping_patience = (
             int(early_stopping_patience) if early_stopping_patience is not None else None
         )
+        self.collapse_threshold = (
+            float(collapse_threshold) if collapse_threshold is not None else None
+        )
+        self.collapse_patience_epochs = int(collapse_patience_epochs)
         self.lr = float(lr)
         self.backbone_lr = float(backbone_lr) if backbone_lr is not None else self.lr
         self.min_lr = float(min_lr) if min_lr is not None else None
@@ -643,24 +652,8 @@ class YodaTrainer:
             "mean_knowledge": total_knowledge / total_samples,
         }
 
-    def fit(
-        self,
-        train_loader: DataLoader[dict[str, Any]],
-        eval_loader: DataLoader[dict[str, Any]] | None = None,
-        epochs: int = 2,
-    ) -> list[dict[str, float]]:
-        """Trains the model across multiple epochs and evaluates validation metrics.
-
-        Args:
-            train_loader: DataLoader for training steps.
-            eval_loader: Optional DataLoader for validation metrics after each epoch.
-            epochs: Number of training epochs to execute.
-
-        Returns:
-            List of per-epoch metric dictionaries.
-        """
-        history: list[dict[str, float]] = []
-
+    def _setup_schedulers(self, train_loader: DataLoader[dict[str, Any]]) -> None:
+        """Initializes learning rate and constraint schedulers if enabled."""
         if self.use_scheduler and self.scheduler is None and len(train_loader) > 0:
             t_0 = max(1, len(train_loader) * max(1, self.t0_epochs))
             eta_min = self.min_lr if self.min_lr is not None else 0.0
@@ -694,6 +687,25 @@ class YodaTrainer:
                 t_mult=sched.T_mult,
                 start_step=sched.T_0,
             )
+
+    def fit(
+        self,
+        train_loader: DataLoader[dict[str, Any]],
+        eval_loader: DataLoader[dict[str, Any]] | None = None,
+        epochs: int = 2,
+    ) -> list[dict[str, float]]:
+        """Trains the model across multiple epochs and evaluates validation metrics.
+
+        Args:
+            train_loader: DataLoader for training steps.
+            eval_loader: Optional DataLoader for validation metrics after each epoch.
+            epochs: Number of training epochs to execute.
+
+        Returns:
+            List of per-epoch metric dictionaries.
+        """
+        history: list[dict[str, float]] = []
+        self._setup_schedulers(train_loader)
 
         best_eval_loss = float("inf")
         epochs_without_improvement = 0
@@ -815,6 +827,21 @@ class YodaTrainer:
 
                 # Checkpointing & Early Stopping
                 if eval_loader is not None:
+                    # Collapse pruning: abort early if model collapsed to majority baseline
+                    if (
+                        self.collapse_threshold is not None
+                        and epoch >= self.collapse_patience_epochs
+                        and epoch_record["eval_accuracy"] <= self.collapse_threshold
+                    ):
+                        logger.warning(
+                            "Collapse pruning triggered: eval_acc ({:.4f}) <= threshold ({:.4f}) "
+                            "at epoch {}. Aborting collapsed trial early.",
+                            epoch_record["eval_accuracy"],
+                            self.collapse_threshold,
+                            epoch,
+                        )
+                        break
+
                     if epoch_record["eval_loss"] < best_eval_loss:
                         best_eval_loss = epoch_record["eval_loss"]
                         epochs_without_improvement = 0

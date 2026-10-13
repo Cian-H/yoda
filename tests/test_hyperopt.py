@@ -210,3 +210,49 @@ def test_build_base_study_parser_heartbeat_flags() -> None:
     assert args.heartbeat_interval == 45
     assert args.grace_period == 120
 
+
+def test_build_base_study_parser_collapse_flags() -> None:
+    """Verify parser parses --collapse-threshold and --collapse-patience-epochs."""
+    parser = build_base_study_parser("Test")
+    default_args = parser.parse_args([])
+    assert default_args.collapse_threshold == 0.370
+    assert default_args.collapse_patience_epochs == 2
+
+    custom_args = parser.parse_args([
+        "--collapse-threshold",
+        "0.40",
+        "--collapse-patience-epochs",
+        "3",
+    ])
+    assert custom_args.collapse_threshold == 0.40
+    assert custom_args.collapse_patience_epochs == 3
+
+
+def test_run_training_trial_seed_randomization(tmp_path: Path) -> None:
+    """Verify run_training_trial injects a randomized non-42 seed when not specified."""
+    study = optuna.create_study(direction="maximize")
+    trial = study.ask()
+    trial_dir = tmp_path / "trial_seed_test"
+
+    history_data = [{"epoch": 1, "eval_accuracy": 0.49}]
+    mock_run = MagicMock()
+    mock_run.returncode = 0
+
+    with (
+        patch("subprocess.run", return_value=mock_run) as patched_run,
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.open"),
+        patch("json.load", return_value=history_data),
+    ):
+        run_training_trial(trial, trial_dir, {"lr": 1e-4})
+        assert "seed" in trial.user_attrs
+        assert trial.user_attrs["seed"] != 42
+        assert isinstance(trial.user_attrs["seed"], int)
+
+        # Check command passed to subprocess.run
+        cmd = patched_run.call_args[0][0]
+        assert "--seed" in cmd
+        seed_val = int(cmd[cmd.index("--seed") + 1])
+        assert seed_val == trial.user_attrs["seed"]
+        assert seed_val != 42
+

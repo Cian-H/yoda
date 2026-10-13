@@ -64,6 +64,8 @@ def test_objective_command_construction(tmp_path: Path) -> None:
         epochs=8,
         batch_size=8,
         early_stopping_patience=2,
+        collapse_threshold=0.370,
+        collapse_patience_epochs=2,
         train_path=None,
     )
 
@@ -83,6 +85,8 @@ def test_objective_command_construction(tmp_path: Path) -> None:
         assert params["d_hidden_multiplier"] == 1.4
         assert params["epochs"] == 8
         assert params["max_samples"] == 16000
+        assert params["collapse_threshold"] == 0.370
+        assert params["collapse_patience_epochs"] == 2
 
 
 def test_parser_defaults() -> None:

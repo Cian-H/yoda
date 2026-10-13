@@ -121,9 +121,22 @@ def run_training_trial(
         optuna.TrialPruned: If the subprocess exits with non-zero status or history.json is missing.
     """
     trial_dir.mkdir(parents=True, exist_ok=True)
-    cmd = build_training_command(trial_dir, training_args, script_path=script_path)
+    trial_training_args = dict(training_args)
+    if "seed" not in trial_training_args:
+        trial_seed = secrets.randbits(31)
+        while trial_seed == 42:
+            trial_seed = secrets.randbits(31)
+        trial_training_args["seed"] = trial_seed
+    trial.set_user_attr("seed", trial_training_args["seed"])
 
-    logger.info("Starting Trial #{} with {} parameters", trial.number, len(training_args))
+    cmd = build_training_command(trial_dir, trial_training_args, script_path=script_path)
+
+    logger.info(
+        "Starting Trial #{} (seed={}) with {} parameters",
+        trial.number,
+        trial_training_args["seed"],
+        len(trial_training_args),
+    )
 
     try:
         proc = subprocess.run(cmd, check=False)
@@ -339,6 +352,18 @@ def build_base_study_parser(
         default=default_study_patience,
         help="Number of trials without improvement before stopping the study "
         f"(default: {default_study_patience})",
+    )
+    parser.add_argument(
+        "--collapse-threshold",
+        type=float,
+        default=0.370,
+        help="Accuracy floor below which training terminates if stuck in collapse (default: 0.370)",
+    )
+    parser.add_argument(
+        "--collapse-patience-epochs",
+        type=int,
+        default=2,
+        help="Number of epochs before collapse pruning is enforced (default: 2)",
     )
     parser.add_argument(
         "--train-path",

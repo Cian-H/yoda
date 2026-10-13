@@ -865,6 +865,51 @@ class TestYodaTrainer:
         assert trainer_default.optimizer.param_groups[0]["lr"] == head_lr
         assert trainer_default.optimizer.param_groups[1]["lr"] == head_lr
 
+    def test_trainer_collapse_pruning(
+        self,
+        dummy_engine: YodaDecisionEngine,
+        synthetic_loader: DataLoader[dict[str, Any]],
+    ) -> None:
+        """Verifies fit() terminates early when eval_accuracy <= collapse_threshold at
+        epoch >= patience.
+        """
+        trainer = YodaTrainer(
+            model=dummy_engine,
+            device="cpu",
+            collapse_threshold=0.370,
+            collapse_patience_epochs=2,
+        )
+
+        call_count = 0
+
+        def mock_eval(loader: Any) -> dict[str, float]:
+            nonlocal call_count
+            call_count += 1
+            return {
+                "loss": 1.0,
+                "ce_loss": 1.0,
+                "focal_loss": 0.0,
+                "margin_loss": 0.0,
+                "belnap_loss": 0.0,
+                "ltn_loss": 0.0,
+                "assertion_loss": 0.0,
+                "accuracy": 0.366875,  # Majority-class collapsed accuracy
+                "mean_knowledge": 0.0,
+            }
+
+        trainer.evaluate = mock_eval  # type: ignore
+
+        history = trainer.fit(
+            train_loader=synthetic_loader,
+            eval_loader=synthetic_loader,
+            epochs=8,
+        )
+
+        # Should have executed exactly 2 epochs and then aborted
+        assert len(history) == 2
+        assert history[-1]["eval_accuracy"] == 0.366875
+        assert call_count == 2
+
 
 class TestYodaLightningAdapterScheduler:
     """Verifies scheduler configuration in YodaLightningAdapter."""
@@ -1166,4 +1211,26 @@ def test_train_yoda_cli_topological_args() -> None:
     assert custom_args.d_hidden_multiplier == 4.0
 
 
+def test_train_yoda_cli_collapse_args() -> None:
+    """Verifies CLI parsing and defaults for collapse pruning parameters."""
+    import sys
 
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from experiments.train_yoda import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args([])
+    assert default_args.collapse_threshold is None
+    assert default_args.collapse_patience_epochs == 2
+
+    custom_args = parser.parse_args([
+        "--collapse-threshold",
+        "0.370",
+        "--collapse-patience-epochs",
+        "3",
+    ])
+    assert custom_args.collapse_threshold == 0.370
+    assert custom_args.collapse_patience_epochs == 3
