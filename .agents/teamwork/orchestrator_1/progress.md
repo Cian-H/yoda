@@ -13,7 +13,7 @@ Current iteration: 1 / 32
 - [x] Milestone 2: Phase 2 NeSy Reformulation & Epistemic Logits (R3) (COMPLETED — Gate PASSED by Mistral continuation 2026-10-13; unit suite 387/387, ruff clean; Tier-4 epistemic calibration gate deferred to M3 wiring)
 - [x] Milestone 3: Phase 3 Bilinear Head & Negation Equivariance (R4) (COMPLETED — Mistral continuation 2026-10-13; accuracy ceiling gate 75% > 60% across seeds, paraconsistent k <= 0.011, gradient health 10 seeds, all R4 tier gates green)
 - [x] Milestone 4: Phase 4 Context Deduplication & Sweep (R5) (COMPLETED — Mistral continuation 2026-10-13; throughput 3.2-5.4x >= 2x gate, Optuna bounds realigned, 74/74 Tier-4 e2e gates green)
-- [ ] Final Milestone: 100% E2E Pass & Adversarial Coverage Hardening
+- [x] Final Milestone: 100% E2E Pass & Adversarial Coverage Hardening (COMPLETED — 74/74 Tier-4 e2e gates green including adversarial boundary/corner and cross-feature tiers; verified by Mistral continuation 2026-10-13)
 
 ## Active Dispatches
 - 47a81ec6-8925-4569-920c-116a702a2036: teamwork_preview_reviewer (reviewer_m2_1) — Evaluating correctness
