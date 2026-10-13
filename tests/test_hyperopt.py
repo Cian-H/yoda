@@ -183,3 +183,30 @@ def test_optuna_study_objective(tmp_path: Path) -> None:
         acc = broad_objective(trial, args)
         assert acc == 0.45
         patched_run.assert_called_once()
+
+
+def test_init_study_and_metadata_heartbeat(tmp_path: Path) -> None:
+    """Verify init_study_and_metadata configures RDBStorage heartbeat for distributed runs."""
+    db_path = tmp_path / "distributed_test.db"
+    storage_url = f"sqlite:///{db_path}"
+
+    study, metadata = init_study_and_metadata(
+        study_name="dist_study_test",
+        storage=storage_url,
+        heartbeat_interval=15,
+        grace_period=45,
+        metadata_dir=tmp_path,
+    )
+
+    assert study._storage.get_heartbeat_interval() == 15
+    assert metadata["heartbeat_interval"] == 15
+    assert metadata["grace_period"] == 45
+
+
+def test_build_base_study_parser_heartbeat_flags() -> None:
+    """Verify parser parses --heartbeat-interval and --grace-period."""
+    parser = build_base_study_parser("Test")
+    args = parser.parse_args(["--heartbeat-interval", "45", "--grace-period", "120"])
+    assert args.heartbeat_interval == 45
+    assert args.grace_period == 120
+

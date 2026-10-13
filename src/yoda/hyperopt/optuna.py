@@ -14,11 +14,13 @@ import json
 import secrets
 import subprocess
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
 import optuna
 from loguru import logger
+from optuna.storages import RDBStorage, RetryHeartbeatStaleTrialCallback, fail_stale_trials
 
 
 class StudyEarlyStoppingCallback:
@@ -177,6 +179,8 @@ def init_study_and_metadata(
     metadata_dir: Path | str = "data",
     extra_metadata: dict[str, Any] | None = None,
     load_if_exists: bool = True,
+    heartbeat_interval: int | None = 30,
+    grace_period: int | None = None,
 ) -> tuple[optuna.Study, dict[str, Any]]:
     """Initializes an Optuna study with multivariate TPESampler and records metadata JSON.
 
@@ -188,6 +192,8 @@ def init_study_and_metadata(
         metadata_dir: Directory where metadata JSON is persisted.
         extra_metadata: Additional configuration or study parameters to record.
         load_if_exists: Whether to reload an existing study with the same name.
+        heartbeat_interval: Heartbeat interval in seconds for distributed execution.
+        grace_period: Grace period in seconds before failing stale trials (default: 2 * interval).
 
     Returns:
         Tuple of (optuna.Study, metadata_dict).
@@ -204,23 +210,46 @@ def init_study_and_metadata(
     target_metadata_dir = Path(metadata_dir)
     target_metadata_dir.mkdir(parents=True, exist_ok=True)
 
-    resolved_storage = storage if storage else "sqlite:///data/optuna.db"
+    resolved_storage_url = storage if storage else "sqlite:///data/optuna.db"
     resolved_study_name = study_name if study_name else f"yoda_sweep_{int(time.time())}"
+
+    # Setup RDBStorage with heartbeat monitoring for distributed workers
+    if heartbeat_interval and heartbeat_interval > 0 and ":memory:" not in resolved_storage_url:
+        connect_args = {"timeout": 60.0} if resolved_storage_url.startswith("sqlite") else {}
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
+            study_storage = RDBStorage(
+                url=resolved_storage_url,
+                heartbeat_interval=heartbeat_interval,
+                grace_period=grace_period,
+                heartbeat_stale_trial_callback=RetryHeartbeatStaleTrialCallback(max_retry=3),
+                engine_kwargs={"connect_args": connect_args} if connect_args else None,
+            )
+    else:
+        study_storage = resolved_storage_url
 
     study = optuna.create_study(
         study_name=resolved_study_name,
-        storage=resolved_storage,
+        storage=study_storage,
         sampler=sampler,
         direction=direction,
         load_if_exists=load_if_exists,
     )
 
+    # Clean up any stale trials from earlier aborted distributed workers
+    if isinstance(study_storage, RDBStorage):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
+            fail_stale_trials(study)
+
     metadata: dict[str, Any] = {
         "study_name": resolved_study_name,
         "seed": resolved_seed,
-        "storage": resolved_storage,
+        "storage": resolved_storage_url,
         "direction": direction,
         "sampler": type(sampler).__name__,
+        "heartbeat_interval": heartbeat_interval,
+        "grace_period": grace_period,
         "created_at": time.time(),
     }
     if extra_metadata:
@@ -234,7 +263,7 @@ def init_study_and_metadata(
         "Initialized study '{}' with seed={} and storage={}",
         resolved_study_name,
         resolved_seed,
-        resolved_storage,
+        resolved_storage_url,
     )
     logger.info("Wrote study metadata to {}", metadata_path)
 
@@ -334,5 +363,17 @@ def build_base_study_parser(
         type=str,
         default=None,
         help=f"Database storage URL (default: {default_storage})",
+    )
+    parser.add_argument(
+        "--heartbeat-interval",
+        type=int,
+        default=30,
+        help="Heartbeat recording interval in seconds for distributed trials (default: 30)",
+    )
+    parser.add_argument(
+        "--grace-period",
+        type=int,
+        default=None,
+        help="Grace period before failing stale trials (default: 2 * heartbeat_interval)",
     )
     return parser

@@ -119,6 +119,8 @@ def main() -> None:
         study_name=study_name,
         storage=args.storage,
         seed=args.seed,
+        heartbeat_interval=args.heartbeat_interval if args.heartbeat_interval > 0 else None,
+        grace_period=args.grace_period,
         extra_metadata={
             "n_trials": args.n_trials,
             "study_patience": args.study_patience,
@@ -126,6 +128,8 @@ def main() -> None:
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "early_stopping_patience": args.early_stopping_patience,
+            "heartbeat_interval": args.heartbeat_interval,
+            "grace_period": args.grace_period,
             "fixed_parameters": {
                 "text_model_name": FIXED_TEXT_MODEL_NAME,
                 "num_reasoning_blocks": FIXED_NUM_REASONING_BLOCKS,
@@ -145,8 +149,16 @@ def main() -> None:
         },
     )
 
-    # Enqueue champion Trial #40 baseline point
-    study.enqueue_trial(CHAMPION_TRIAL_40_PARAMS)
+    # Enqueue champion Trial #40 baseline point idempotently for distributed workers
+    champ_q = CHAMPION_TRIAL_40_PARAMS["num_q_probes"]
+    champ_conf = CHAMPION_TRIAL_40_PARAMS["conflation_weight"]
+    already_enqueued = any(
+        t.params.get("num_q_probes") == champ_q
+        and abs(t.params.get("conflation_weight", 0.0) - champ_conf) < 1e-4
+        for t in study.get_trials(deepcopy=False)
+    )
+    if not already_enqueued:
+        study.enqueue_trial(CHAMPION_TRIAL_40_PARAMS)
 
     study.optimize(
         lambda t: objective(t, args),
