@@ -1,6 +1,6 @@
 """Phase 1 input encoders for text, symbolic states, and constraints."""
 
-from typing import Any, cast
+from typing import Any, Literal, cast, overload
 
 import torch
 from torch import nn
@@ -47,8 +47,34 @@ class TextEncoder(nn.Module):
         """Returns the effective dimension of output embeddings."""
         return self.target_dim or self._dim
 
-    def forward(self, texts: list[str]) -> torch.Tensor:
-        """Returns sequence embeddings of shape (batch_size, seq_len, target_dim)."""
+    @overload
+    def forward(
+        self,
+        texts: list[str],
+        return_mask: Literal[False] = False,
+    ) -> torch.Tensor: ...
+
+    @overload
+    def forward(
+        self,
+        texts: list[str],
+        return_mask: Literal[True],
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+    @overload
+    def forward(
+        self,
+        texts: list[str],
+        return_mask: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]: ...
+
+    def forward(
+        self,
+        texts: list[str],
+        return_mask: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Returns sequence embeddings of shape (batch_size, seq_len, target_dim),
+        and optionally attention_mask of shape (batch_size, seq_len) boolean tensor."""
         if self.model_name == "dummy":
             batch_size = len(texts)
             dim = self.target_dim or self._dim
@@ -60,11 +86,21 @@ class TextEncoder(nn.Module):
             )
 
             if batch_size == 0:
-                return torch.empty((0, 0, dim), device=dev, dtype=dtype)
+                empty_emb = torch.empty((0, 0, dim), device=dev, dtype=dtype)
+                empty_mask = torch.empty((0, 0), device=dev, dtype=torch.bool)
+                return (empty_emb, empty_mask) if return_mask else empty_emb
 
             seq_len = max((len(t.split()) for t in texts), default=0) or 1
             fake_ids = torch.randint(0, 1000, (batch_size, seq_len), device=dev)
-            return self.dummy_embed(fake_ids)
+            emb = self.dummy_embed(fake_ids)
+            if not return_mask:
+                return emb
+            mask = torch.zeros((batch_size, seq_len), device=dev, dtype=torch.bool)
+            for i, t in enumerate(texts):
+                words = len(t.split())
+                if words > 0:
+                    mask[i, : min(words, seq_len)] = True
+            return emb, mask
 
         assert self.tokenizer is not None
         inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
@@ -78,7 +114,16 @@ class TextEncoder(nn.Module):
         outputs = self.model(**inputs)
         # Sequence of hidden states (batch_size, seq_len, hidden_size)
         hidden_states = outputs.last_hidden_state
-        return self.adapter(hidden_states)
+        emb = self.adapter(hidden_states)
+        if not return_mask:
+            return emb
+        raw_mask = inputs["attention_mask"]
+        mask = raw_mask.bool() if raw_mask.dtype != torch.bool else raw_mask
+        return emb, mask
+
+    def forward_with_mask(self, texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encodes text returning both embeddings and boolean attention mask."""
+        return cast(tuple[torch.Tensor, torch.Tensor], self.forward(texts, return_mask=True))
 
 
 class SymbolicStateEncoder(nn.Module):
@@ -94,10 +139,42 @@ class SymbolicStateEncoder(nn.Module):
             return "empty"
         return " | ".join(f"{k}: {v}" for k, v in state.items())
 
-    def forward(self, states: list[dict[str, Any]]) -> torch.Tensor:
+    @overload
+    def forward(
+        self,
+        states: list[dict[str, Any]],
+        return_mask: Literal[False] = False,
+    ) -> torch.Tensor: ...
+
+    @overload
+    def forward(
+        self,
+        states: list[dict[str, Any]],
+        return_mask: Literal[True],
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+    @overload
+    def forward(
+        self,
+        states: list[dict[str, Any]],
+        return_mask: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]: ...
+
+    def forward(
+        self,
+        states: list[dict[str, Any]],
+        return_mask: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Encodes a batch of dictionaries into tensor sequences."""
         formatted = [self._format_dict(s) for s in states]
-        return self.text_encoder(formatted)
+        return self.text_encoder(formatted, return_mask=return_mask)
+
+    def forward_with_mask(
+        self,
+        states: list[dict[str, Any]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encodes a batch of dictionaries returning embeddings and attention mask."""
+        return cast(tuple[torch.Tensor, torch.Tensor], self.forward(states, return_mask=True))
 
 
 class ConstraintEncoder(nn.Module):
@@ -144,12 +221,47 @@ class ConstraintEncoder(nn.Module):
         cand_pooled = cand_seq.mean(dim=1)
         return cand_pooled.view(batch_size, max_candidates, -1)
 
-    def forward(self, constraints_batch: list[str] | list[list[str]]) -> torch.Tensor:
+    @overload
+    def forward(
+        self,
+        constraints_batch: list[str] | list[list[str]],
+        return_mask: Literal[False] = False,
+    ) -> torch.Tensor: ...
+
+    @overload
+    def forward(
+        self,
+        constraints_batch: list[str] | list[list[str]],
+        return_mask: Literal[True],
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+    @overload
+    def forward(
+        self,
+        constraints_batch: list[str] | list[list[str]],
+        return_mask: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]: ...
+
+    def forward(
+        self,
+        constraints_batch: list[str] | list[list[str]],
+        return_mask: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Encodes batches of constraints or flat candidate strings."""
         if not constraints_batch:
-            return self.text_encoder([])
+            return self.text_encoder([], return_mask=return_mask)
         if isinstance(constraints_batch[0], str):
-            return self.text_encoder(cast(list[str], constraints_batch))
+            return self.text_encoder(cast(list[str], constraints_batch), return_mask=return_mask)
         nested_batch = cast(list[list[str]], constraints_batch)
         formatted = [self._format_constraints(c) for c in nested_batch]
-        return self.text_encoder(formatted)
+        return self.text_encoder(formatted, return_mask=return_mask)
+
+    def forward_with_mask(
+        self,
+        constraints_batch: list[str] | list[list[str]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encodes batches of constraints returning embeddings and attention mask."""
+        return cast(
+            tuple[torch.Tensor, torch.Tensor],
+            self.forward(constraints_batch, return_mask=True),
+        )

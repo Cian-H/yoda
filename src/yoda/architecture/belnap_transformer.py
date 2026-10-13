@@ -110,11 +110,24 @@ class BelnapAttention(nn.Module):
         self.w_out_pos = nn.Linear(d_model, d_model, bias=bias)
         self.w_out_neg = nn.Linear(d_model, d_model, bias=bias)
 
+        # Pre-sigmoid normalization (R2: Pre-Activation Normalization)
+        self.norm_pos = nn.LayerNorm(d_model)
+        self.norm_neg = nn.LayerNorm(d_model)
+
         # Initialize output evidence biases negative so uninformative input suppresses to Neither
         if self.w_out_pos.bias is not None:
             nn.init.constant_(self.w_out_pos.bias, init_bias)
         if self.w_out_neg.bias is not None:
             nn.init.constant_(self.w_out_neg.bias, init_bias)
+        if self.norm_pos.bias is not None:
+            nn.init.constant_(self.norm_pos.bias, init_bias)
+        if self.norm_neg.bias is not None:
+            nn.init.constant_(self.norm_neg.bias, init_bias)
+        if init_bias != 0.0:
+            if self.norm_pos.weight is not None:
+                nn.init.constant_(self.norm_pos.weight, 0.1)
+            if self.norm_neg.weight is not None:
+                nn.init.constant_(self.norm_neg.weight, 0.1)
 
         logger.debug(
             "architecture.belnap_attention.init",
@@ -176,13 +189,24 @@ class BelnapAttention(nn.Module):
             + torch.matmul(q_neg, k_pos.transpose(-2, -1))
         ) / scale
 
+        bool_mask: torch.Tensor | None = None
         if mask is not None:
-            if mask.dtype == torch.bool:
-                s_pos = s_pos.masked_fill(~mask, -1e9)
-                s_neg = s_neg.masked_fill(~mask, -1e9)
+            if mask.dim() == 2:
+                mask_4d = mask.unsqueeze(1).unsqueeze(2)
+            elif mask.dim() == 3:
+                mask_4d = mask.unsqueeze(1)
             else:
-                s_pos = s_pos + mask
-                s_neg = s_neg + mask
+                mask_4d = mask
+
+            if mask_4d.dtype == torch.bool:
+                bool_mask = mask_4d
+            elif mask_4d.dtype.is_floating_point:
+                bool_mask = mask_4d > -1e4 if (mask_4d < -1e4).any() else mask_4d > 0.5
+            else:
+                bool_mask = mask_4d != 0
+
+            s_pos = s_pos.masked_fill(~bool_mask, -1e9)
+            s_neg = s_neg.masked_fill(~bool_mask, -1e9)
 
         # Step 3: Knowledge Gating by source token intrinsic knowledge
         # Intrinsic knowledge mass per source token: k_src in [0, 1]
@@ -191,16 +215,25 @@ class BelnapAttention(nn.Module):
         a_pos = torch.sigmoid(s_pos) * k_gate
         a_neg = torch.sigmoid(s_neg) * k_gate
 
-        # Step 4: Evidence Aggregation
-        agg_pos = torch.matmul(a_pos, v_pos)  # (B, H, L_q, d_k)
-        agg_neg = torch.matmul(a_neg, v_neg)  # (B, H, L_q, d_k)
+        if bool_mask is not None:
+            a_pos = a_pos.masked_fill(~bool_mask, 0.0)
+            a_neg = a_neg.masked_fill(~bool_mask, 0.0)
+
+        # Step 4: Evidence Aggregation (2x2 Coupled Cross-Polarity Bilattice Routing)
+        agg_pos = torch.matmul(a_pos, v_pos) + torch.matmul(a_neg, v_neg)  # (B, H, L_q, d_k)
+        agg_neg = torch.matmul(a_pos, v_neg) + torch.matmul(a_neg, v_pos)  # (B, H, L_q, d_k)
+
+        if bool_mask is not None:
+            denom = bool_mask.float().sum(dim=-1, keepdim=True).clamp(min=1.0)
+            agg_pos = agg_pos / denom
+            agg_neg = agg_neg / denom
 
         agg_pos = agg_pos.transpose(1, 2).contiguous().view(batch_size, l_q, self.d_model)
         agg_neg = agg_neg.transpose(1, 2).contiguous().view(batch_size, l_q, self.d_model)
 
-        # Output bounds in [0, 1]
-        out_pos = torch.sigmoid(self.w_out_pos(agg_pos))
-        out_neg = torch.sigmoid(self.w_out_neg(agg_neg))
+        # Output bounds in [0, 1] with pre-sigmoid LayerNorm
+        out_pos = torch.sigmoid(self.norm_pos(self.w_out_pos(agg_pos)))
+        out_neg = torch.sigmoid(self.norm_neg(self.w_out_neg(agg_neg)))
 
         return BelnapState(e_pos=out_pos, e_neg=out_neg)
 
@@ -227,12 +260,18 @@ class BelnapFFN(nn.Module):
         if d_hidden is None:
             d_hidden = 4 * d_model
 
+        self.d_model = d_model
+        self.d_hidden = d_hidden
         self.conflation_weight = conflation_weight
         self.dropout = nn.Dropout(dropout)
         self.w_1 = nn.Linear(d_model, d_hidden)
         self.w_2 = nn.Linear(d_model, d_hidden)
         self.w_o1 = nn.Linear(d_hidden, d_model)
         self.w_o2 = nn.Linear(d_hidden, d_model)
+
+        # Pre-sigmoid normalization (R2: Pre-Activation Normalization)
+        self.norm_pos = nn.LayerNorm(d_model)
+        self.norm_neg = nn.LayerNorm(d_model)
 
     def forward(self, x: BelnapState) -> BelnapState:
         """Transforms evidence through conflation and non-linear feature projection."""
@@ -243,9 +282,9 @@ class BelnapFFN(nn.Module):
         h_mid = nn.functional.mish(self.w_1(x_res.e_pos) + self.w_2(x_res.e_neg))
         h_mid = self.dropout(h_mid)
 
-        # 3. Output projections bounded in [0, 1]
-        e_ffn_pos = torch.sigmoid(self.w_o1(h_mid))
-        e_ffn_neg = torch.sigmoid(self.w_o2(h_mid))
+        # 3. Output projections bounded in [0, 1] with pre-sigmoid LayerNorm
+        e_ffn_pos = torch.sigmoid(self.norm_pos(self.w_o1(h_mid)))
+        e_ffn_neg = torch.sigmoid(self.norm_neg(self.w_o2(h_mid)))
 
         return BelnapState(e_pos=e_ffn_pos, e_neg=e_ffn_neg)
 
@@ -259,7 +298,7 @@ class BelnapTransformerBlock(nn.Module):
         n_heads: int = 4,
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
-        residual_weight: float = 0.5,
+        residual_weight: float = 0.15,
         dropout: float = 0.0,
     ) -> None:
         """Initializes BelnapTransformerBlock.
@@ -270,6 +309,7 @@ class BelnapTransformerBlock(nn.Module):
             d_hidden: Hidden dimensionality of FFN.
             conflation_weight: Weight lambda for evidence conflation.
             residual_weight: Interpolation weight alpha for convex combination residual join.
+                Defaults to 0.15 for >35% residual gradient retention across cascaded reasoning.
             dropout: Dropout probability. Defaults to 0.0.
         """
         super().__init__()
@@ -289,7 +329,7 @@ class BelnapTransformerBlock(nn.Module):
     def _residual_join(
         base: BelnapState,
         delta: BelnapState,
-        alpha: float = 0.5,
+        alpha: float = 0.15,
     ) -> BelnapState:
         """Applies convex combination residual join preserving [0, 1] evidence invariants.
 
@@ -331,7 +371,7 @@ class BelnapDecisionTransformer(nn.Module):
         num_choices: int = 5,
         d_hidden: int | None = None,
         conflation_weight: float = 0.1,
-        residual_weight: float = 0.5,
+        residual_weight: float = 0.15,
         dropout: float = 0.0,
     ) -> None:
         """Initializes BelnapDecisionTransformer.

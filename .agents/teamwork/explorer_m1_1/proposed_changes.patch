@@ -1,0 +1,277 @@
+--- a/src/yoda/architecture/encoders.py
++++ b/src/yoda/architecture/encoders.py
+@@ -3,7 +3,7 @@
+-from typing import Any, cast
++from typing import Any, Literal, cast, overload
+ 
+ import torch
+ from torch import nn
+ from transformers import AutoModel, AutoTokenizer
+@@ -49,8 +49,24 @@
+     def dim(self) -> int:
+         """Returns the effective dimension of output embeddings."""
+         return self.target_dim or self._dim
+ 
++    @overload
++    def forward(
++        self,
++        texts: list[str],
++        return_mask: Literal[False] = False,
++    ) -> torch.Tensor: ...
++
++    @overload
++    def forward(
++        self,
++        texts: list[str],
++        return_mask: Literal[True],
++    ) -> tuple[torch.Tensor, torch.Tensor]: ...
++
++    @overload
++    def forward(
++        self,
++        texts: list[str],
++        return_mask: bool = False,
++    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]: ...
++
+-    def forward(self, texts: list[str]) -> torch.Tensor:
+-        """Returns sequence embeddings of shape (batch_size, seq_len, target_dim)."""
++    def forward(
++        self,
++        texts: list[str],
++        return_mask: bool = False,
++    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
++        """Returns sequence embeddings of shape (batch_size, seq_len, target_dim),
++        and optionally attention_mask of shape (batch_size, seq_len) boolean tensor."""
+         if self.model_name == "dummy":
+             batch_size = len(texts)
+             dim = self.target_dim or self._dim
+@@ -62,7 +78,9 @@
+             if batch_size == 0:
+-                return torch.empty((0, 0, dim), device=dev, dtype=dtype)
++                empty_emb = torch.empty((0, 0, dim), device=dev, dtype=dtype)
++                empty_mask = torch.empty((0, 0), device=dev, dtype=torch.bool)
++                return (empty_emb, empty_mask) if return_mask else empty_emb
+ 
+             seq_len = max((len(t.split()) for t in texts), default=0) or 1
+             fake_ids = torch.randint(0, 1000, (batch_size, seq_len), device=dev)
+-            return self.dummy_embed(fake_ids)
++            emb = self.dummy_embed(fake_ids)
++            if not return_mask:
++                return emb
++            mask = torch.zeros((batch_size, seq_len), device=dev, dtype=torch.bool)
++            for i, t in enumerate(texts):
++                words = len(t.split())
++                if words > 0:
++                    mask[i, : min(words, seq_len)] = True
++            return emb, mask
+ 
+         assert self.tokenizer is not None
+         inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
+@@ -80,7 +98,16 @@
+         hidden_states = outputs.last_hidden_state
+-        return self.adapter(hidden_states)
++        emb = self.adapter(hidden_states)
++        if not return_mask:
++            return emb
++        raw_mask = inputs["attention_mask"]
++        mask = raw_mask.bool() if raw_mask.dtype != torch.bool else raw_mask
++        return emb, mask
++
++    def forward_with_mask(self, texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
++        """Encodes text returning both embeddings and boolean attention mask."""
++        return cast(tuple[torch.Tensor, torch.Tensor], self.forward(texts, return_mask=True))
+ 
+ 
+ class SymbolicStateEncoder(nn.Module):
+@@ -96,8 +123,26 @@
+     def _format_dict(self, state: dict[str, Any]) -> str:
+         """Flattens a dictionary into a structured string."""
+         if not state:
+             return "empty"
+         return " | ".join(f"{k}: {v}" for k, v in state.items())
+ 
++    @overload
++    def forward(
++        self,
++        states: list[dict[str, Any]],
++        return_mask: Literal[False] = False,
++    ) -> torch.Tensor: ...
++
++    @overload
++    def forward(
++        self,
++        states: list[dict[str, Any]],
++        return_mask: Literal[True],
++    ) -> tuple[torch.Tensor, torch.Tensor]: ...
++
++    @overload
++    def forward(
++        self,
++        states: list[dict[str, Any]],
++        return_mask: bool = False,
++    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]: ...
++
+-    def forward(self, states: list[dict[str, Any]]) -> torch.Tensor:
++    def forward(
++        self,
++        states: list[dict[str, Any]],
++        return_mask: bool = False,
++    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+         """Encodes a batch of dictionaries into tensor sequences."""
+         formatted = [self._format_dict(s) for s in states]
+-        return self.text_encoder(formatted)
++        return self.text_encoder(formatted, return_mask=return_mask)
++
++    def forward_with_mask(
++        self,
++        states: list[dict[str, Any]],
++    ) -> tuple[torch.Tensor, torch.Tensor]:
++        """Encodes a batch of dictionaries returning embeddings and attention mask."""
++        return cast(tuple[torch.Tensor, torch.Tensor], self.forward(states, return_mask=True))
+ 
+ 
+ class ConstraintEncoder(nn.Module):
+@@ -146,11 +191,37 @@
+         return cand_pooled.view(batch_size, max_candidates, -1)
+ 
++    @overload
++    def forward(
++        self,
++        constraints_batch: list[str] | list[list[str]],
++        return_mask: Literal[False] = False,
++    ) -> torch.Tensor: ...
++
++    @overload
++    def forward(
++        self,
++        constraints_batch: list[str] | list[list[str]],
++        return_mask: Literal[True],
++    ) -> tuple[torch.Tensor, torch.Tensor]: ...
++
++    @overload
++    def forward(
++        self,
++        constraints_batch: list[str] | list[list[str]],
++        return_mask: bool = False,
++    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]: ...
++
+-    def forward(self, constraints_batch: list[str] | list[list[str]]) -> torch.Tensor:
++    def forward(
++        self,
++        constraints_batch: list[str] | list[list[str]],
++        return_mask: bool = False,
++    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+         """Encodes batches of constraints or flat candidate strings."""
+         if not constraints_batch:
+-            return self.text_encoder([])
++            return self.text_encoder([], return_mask=return_mask)
+         if isinstance(constraints_batch[0], str):
+-            return self.text_encoder(cast(list[str], constraints_batch))
++            return self.text_encoder(cast(list[str], constraints_batch), return_mask=return_mask)
+         nested_batch = cast(list[list[str]], constraints_batch)
+         formatted = [self._format_constraints(c) for c in nested_batch]
+-        return self.text_encoder(formatted)
++        return self.text_encoder(formatted, return_mask=return_mask)
++
++    def forward_with_mask(
++        self,
++        constraints_batch: list[str] | list[list[str]],
++    ) -> tuple[torch.Tensor, torch.Tensor]:
++        """Encodes batches of constraints returning embeddings and attention mask."""
++        return cast(
++            tuple[torch.Tensor, torch.Tensor],
++            self.forward(constraints_batch, return_mask=True),
++        )
+--- a/src/yoda/architecture/belnap_transformer.py
++++ b/src/yoda/architecture/belnap_transformer.py
+@@ -178,11 +178,30 @@
+ 
++        bool_mask: torch.Tensor | None = None
+         if mask is not None:
+-            if mask.dtype == torch.bool:
+-                s_pos = s_pos.masked_fill(~mask, -1e9)
+-                s_neg = s_neg.masked_fill(~mask, -1e9)
++            if mask.dim() == 2:
++                mask_4d = mask.unsqueeze(1).unsqueeze(2)
++            elif mask.dim() == 3:
++                mask_4d = mask.unsqueeze(1)
+             else:
+-                s_pos = s_pos + mask
+-                s_neg = s_neg + mask
++                mask_4d = mask
++
++            if mask_4d.dtype == torch.bool:
++                bool_mask = mask_4d
++            elif mask_4d.dtype.is_floating_point:
++                if (mask_4d < -1e4).any():
++                    bool_mask = mask_4d > -1e4
++                else:
++                    bool_mask = mask_4d > 0.5
++            else:
++                bool_mask = mask_4d != 0
++
++            s_pos = s_pos.masked_fill(~bool_mask, -1e9)
++            s_neg = s_neg.masked_fill(~bool_mask, -1e9)
+ 
+         # Step 3: Knowledge Gating by source token intrinsic knowledge
+         k_src = kv.knowledge.mean(dim=-1).unsqueeze(1).unsqueeze(2)  # (B, 1, 1, L_kv)
+         k_gate = 0.5 + 0.5 * k_src
+         a_pos = torch.sigmoid(s_pos) * k_gate
+         a_neg = torch.sigmoid(s_neg) * k_gate
+ 
++        if bool_mask is not None:
++            a_pos = a_pos.masked_fill(~bool_mask, 0.0)
++            a_neg = a_neg.masked_fill(~bool_mask, 0.0)
++
+         # Step 4: Evidence Aggregation
+         agg_pos = torch.matmul(a_pos, v_pos)  # (B, H, L_q, d_k)
+         agg_neg = torch.matmul(a_neg, v_neg)  # (B, H, L_q, d_k)
+ 
++        if bool_mask is not None:
++            denom = bool_mask.float().sum(dim=-1, keepdim=True).clamp(min=1.0)
++        else:
++            denom = max(float(l_kv), 1.0)
++
++        agg_pos = agg_pos / denom
++        agg_neg = agg_neg / denom
++
+         agg_pos = agg_pos.transpose(1, 2).contiguous().view(batch_size, l_q, self.d_model)
+         agg_neg = agg_neg.transpose(1, 2).contiguous().view(batch_size, l_q, self.d_model)
+--- a/src/yoda/architecture/engine.py
++++ b/src/yoda/architecture/engine.py
+@@ -362,17 +362,29 @@
+         # 1. Encoding
+-        q_emb = self.text_encoder(queries)
++        if hasattr(self.text_encoder, "forward_with_mask"):
++            q_emb, q_mask = self.text_encoder.forward_with_mask(queries)
++        else:
++            q_emb = self.text_encoder(queries)
++            q_mask = None
++
+         if task_scalars is not None:
+             task_vector = self.task_proj(task_scalars)
+             if q_emb.dim() == 3:
+                 task_vector = task_vector.unsqueeze(1)
+             q_emb = q_emb + task_vector
+ 
+-        c_emb = self.state_encoder(states)
+-        k_emb = self.constraint_encoder(target_cand)
++        if hasattr(self.state_encoder, "forward_with_mask"):
++            c_emb, c_mask = self.state_encoder.forward_with_mask(states)
++        else:
++            c_emb = self.state_encoder(states)
++            c_mask = None
++
++        if hasattr(self.constraint_encoder, "forward_with_mask"):
++            k_emb, k_mask = self.constraint_encoder.forward_with_mask(target_cand)
++        else:
++            k_emb = self.constraint_encoder(target_cand)
++            k_mask = None
+ 
+         # 2. Pooling (Epistemic Sieve)
+-        q_state = cast(BelnapState, self.q_mpa(q_emb))
+-        c_state = cast(BelnapState, self.c_mpa(c_emb))
+-        k_state = cast(BelnapState, self.k_mpa(k_emb))
++        q_state = cast(BelnapState, self.q_mpa(q_emb, mask=q_mask))
++        c_state = cast(BelnapState, self.c_mpa(c_emb, mask=c_mask))
++        k_state = cast(BelnapState, self.k_mpa(k_emb, mask=k_mask))

@@ -33,6 +33,8 @@ class YodaLightningAdapter(pl.LightningModule):
         weight_decay: float = 1e-4,
         belnap_weight: float = 0.1,
         ltn_weight: float = 0.1,
+        decisiveness_weight: float = 0.1,
+        decisiveness_warmup_epochs: int = 0,
         focal_gamma: float = 2.0,
         margin: float = 0.2,
         margin_weight: float = 0.1,
@@ -49,6 +51,8 @@ class YodaLightningAdapter(pl.LightningModule):
             weight_decay: Weight decay regularizer.
             belnap_weight: Multiplier for FuzzyBelnapLoss.
             ltn_weight: Multiplier for task-conditioned LTNConstraintLoss.
+            decisiveness_weight: Target multiplier weight for contradiction penalty.
+            decisiveness_warmup_epochs: Number of epochs for linear warmup of contradiction penalty.
             focal_gamma: Focusing exponent for FocalLoss.
             margin: Target separation margin for MarginLoss.
             margin_weight: Weight coefficient for MarginLoss term.
@@ -63,6 +67,8 @@ class YodaLightningAdapter(pl.LightningModule):
         self.weight_decay = float(weight_decay)
         self.belnap_weight = float(belnap_weight)
         self.ltn_weight = float(ltn_weight)
+        self.decisiveness_weight = float(decisiveness_weight)
+        self.decisiveness_warmup_epochs = max(0, int(decisiveness_warmup_epochs))
         self.focal_gamma = float(focal_gamma)
         self.margin = float(margin)
         self.margin_weight = float(margin_weight)
@@ -78,7 +84,10 @@ class YodaLightningAdapter(pl.LightningModule):
             reduction="mean",
         )
         self.belnap_loss_fn = FuzzyBelnapLoss(reduction="mean")
-        self.ltn_criterion = LTNConstraintLoss()
+        self.ltn_criterion = LTNConstraintLoss(
+            decisiveness_weight=self.decisiveness_weight,
+            warmup_epochs=self.decisiveness_warmup_epochs,
+        )
 
         self.save_hyperparameters(ignore=["model"])
         logger.debug(
@@ -284,6 +293,17 @@ class YodaLightningAdapter(pl.LightningModule):
         if self.independent_eval and "candidates" in batch and "candidate_queries" in batch:
             return self._shared_independent_step(batch, stage)
         return self._shared_legacy_step(batch, stage)
+
+    def on_train_epoch_start(self) -> None:
+        """Updates LTN constraint loss warmup schedule at the start of each training epoch."""
+        self.ltn_criterion.step_epoch(self.current_epoch)
+        if self._trainer is not None:
+            self.log(
+                "train/decisiveness_weight",
+                self.ltn_criterion.current_decisiveness_weight,
+                on_step=False,
+                on_epoch=True,
+            )
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
         loss, _ = self._shared_step(batch, stage="train")

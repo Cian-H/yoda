@@ -56,6 +56,25 @@ class BelnapDecisionHead(nn.Module):
         self.cand_opt_pos = nn.Linear(d_model, d_model, device=device, dtype=dtype)
         self.cand_opt_neg = nn.Linear(d_model, d_model, device=device, dtype=dtype)
 
+        # Initialize linear evidence readout with positive weights so positive evidence
+        # reliably maps to positive decision support
+        scale = 1.0 / (d_model**0.5)
+        nn.init.uniform_(self.w_pos.weight, 0.05 * scale, scale)
+        nn.init.zeros_(self.w_pos.bias)
+        nn.init.uniform_(self.w_neg.weight, 0.05 * scale, scale)
+        nn.init.zeros_(self.w_neg.bias)
+
+        # Initialize bilinear candidate projections with identity matrix so initial candidate
+        # alignment preserves direct Belnap inner products (ADR-0011)
+        nn.init.eye_(self.cand_query_pos.weight)
+        nn.init.zeros_(self.cand_query_pos.bias)
+        nn.init.eye_(self.cand_query_neg.weight)
+        nn.init.zeros_(self.cand_query_neg.bias)
+        nn.init.eye_(self.cand_opt_pos.weight)
+        nn.init.zeros_(self.cand_opt_pos.bias)
+        nn.init.eye_(self.cand_opt_neg.weight)
+        nn.init.zeros_(self.cand_opt_neg.bias)
+
     def forward(
         self,
         x: BelnapState,
@@ -88,51 +107,76 @@ class BelnapDecisionHead(nn.Module):
             pooled_pos = x.e_pos
             pooled_neg = x.e_neg
 
-        if self.num_choices == 1:
-            raw_pos = self.w_pos(pooled_pos).squeeze(-1)
-            raw_neg = self.w_neg(pooled_neg).squeeze(-1)
-            choice_pos = torch.sigmoid(raw_pos)
-            choice_neg = torch.sigmoid(raw_neg)
-            logits = raw_pos - raw_neg
-            choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
-            truth = choice_state.truth
-            knowledge = choice_state.knowledge
-            choice = (logits > 0).long()
-            return {
-                "logits": logits,
-                "truth": truth,
-                "knowledge": knowledge,
-                "choice": choice,
-                "choice_pos": choice_pos,
-                "choice_neg": choice_neg,
-            }
+        scale = self.d_model**0.5
 
         if candidate_states is not None:
             # Pairwise candidate alignment scoring
-            q_p = self.cand_query_pos(pooled_pos).unsqueeze(1)  # [B, 1, D]
-            q_n = self.cand_query_neg(pooled_neg).unsqueeze(1)  # [B, 1, D]
-            c_p = self.cand_opt_pos(candidate_states.e_pos)  # [B, num_choices, D]
-            c_n = self.cand_opt_neg(candidate_states.e_neg)  # [B, num_choices, D]
+            if candidate_states.e_pos.dim() == 2:
+                # 2D candidate states: [B, D] (e.g. scalar head evaluation)
+                q_p = self.cand_query_pos(pooled_pos)            # [B, D]
+                q_n = self.cand_query_neg(pooled_neg)            # [B, D]
+                c_p = self.cand_opt_pos(candidate_states.e_pos)  # [B, D]
+                c_n = self.cand_opt_neg(candidate_states.e_neg)  # [B, D]
 
-            scale = self.d_model**0.5
-            pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale
-            neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale
+                pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale  # [B]
+                neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale  # [B]
 
-            choice_pos = torch.sigmoid(pos_affinity)
-            choice_neg = torch.sigmoid(neg_affinity)
-            logits = pos_affinity - neg_affinity
+                cand_k = (candidate_states.e_pos + candidate_states.e_neg).mean(dim=-1) / 2.0  # [B]
+                raw_diff = pos_affinity - neg_affinity
+            else:
+                # 3D candidate states: [B, num_choices, D]
+                q_p = self.cand_query_pos(pooled_pos).unsqueeze(1)  # [B, 1, D]
+                q_n = self.cand_query_neg(pooled_neg).unsqueeze(1)  # [B, 1, D]
+                c_p = self.cand_opt_pos(candidate_states.e_pos)     # [B, num_choices, D]
+                c_n = self.cand_opt_neg(candidate_states.e_neg)     # [B, num_choices, D]
+
+                pos_affinity = (q_p * c_p + q_n * c_n).sum(dim=-1) / scale  # [B, num_choices]
+                neg_affinity = (q_p * c_n + q_n * c_p).sum(dim=-1) / scale  # [B, num_choices]
+
+                # [B, num_choices]
+                cand_k = (candidate_states.e_pos + candidate_states.e_neg).mean(dim=-1) / 2.0
+                raw_diff = pos_affinity - neg_affinity
+                if self.num_choices == 1 and raw_diff.size(-1) == 1:
+                    pos_affinity = pos_affinity.squeeze(-1)
+                    neg_affinity = neg_affinity.squeeze(-1)
+                    raw_diff = raw_diff.squeeze(-1)
+                    cand_k = cand_k.squeeze(-1)
+
+            cand_gate = (2.0 * cand_k).clamp(max=1.0)
+            choice_pos = torch.sigmoid(pos_affinity) * cand_gate
+            choice_neg = torch.sigmoid(neg_affinity) * cand_gate
+
+        elif self.num_choices == 1:
+            raw_pos = self.w_pos(pooled_pos).squeeze(-1)  # [B]
+            raw_neg = self.w_neg(pooled_neg).squeeze(-1)  # [B]
+            raw_diff = raw_pos - raw_neg
+
+            state_k = (pooled_pos + pooled_neg).mean(dim=-1) / 2.0  # [B]
+            cand_gate = (2.0 * state_k).clamp(max=1.0)
+            choice_pos = torch.sigmoid(raw_pos) * cand_gate
+            choice_neg = torch.sigmoid(raw_neg) * cand_gate
+
         else:
-            raw_pos = self.w_pos(pooled_pos)
-            raw_neg = self.w_neg(pooled_neg)
-            choice_pos = torch.sigmoid(raw_pos)
-            choice_neg = torch.sigmoid(raw_neg)
-            logits = raw_pos - raw_neg
+            raw_pos = self.w_pos(pooled_pos)  # [B, num_choices]
+            raw_neg = self.w_neg(pooled_neg)  # [B, num_choices]
+            raw_diff = raw_pos - raw_neg
+
+            state_k = (pooled_pos + pooled_neg).mean(dim=-1, keepdim=True) / 2.0  # [B, 1]
+            cand_gate = (2.0 * state_k).clamp(max=1.0)
+            choice_pos = torch.sigmoid(raw_pos) * cand_gate
+            choice_neg = torch.sigmoid(raw_neg) * cand_gate
 
         choice_state = BelnapState(e_pos=choice_pos, e_neg=choice_neg)
         truth = choice_state.truth
         knowledge = choice_state.knowledge
 
-        choice = torch.argmax(logits, dim=-1)
+        # Epistemic synchronization: logits gated by candidate knowledge coordinate
+        logits = raw_diff * knowledge
+
+        if self.num_choices == 1 or logits.dim() == 1:
+            choice = (logits > 0).long()
+        else:
+            choice = torch.argmax(logits, dim=-1)
 
         return {
             "logits": logits,
@@ -162,7 +206,7 @@ class YodaDecisionEngine(nn.Module):
         num_reasoning_blocks: int = 1,
         conflation_weight: float = 0.1,
         d_hidden_multiplier: float = 2.0,
-        residual_weight: float = 0.5,
+        residual_weight: float = 0.15,
         dropout: float = 0.0,
         use_candidate_affinity: bool = False,
         device: torch.device | None = None,
@@ -360,20 +404,34 @@ class YodaDecisionEngine(nn.Module):
             is_independent = self.num_choices == 1
 
         # 1. Encoding
-        q_emb = self.text_encoder(queries)
+        if hasattr(self.text_encoder, "forward_with_mask"):
+            q_emb, q_mask = self.text_encoder.forward_with_mask(queries)
+        else:
+            q_emb = self.text_encoder(queries)
+            q_mask = None
+
         if task_scalars is not None:
             task_vector = self.task_proj(task_scalars)
             if q_emb.dim() == 3:
                 task_vector = task_vector.unsqueeze(1)
             q_emb = q_emb + task_vector
 
-        c_emb = self.state_encoder(states)
-        k_emb = self.constraint_encoder(target_cand)
+        if hasattr(self.state_encoder, "forward_with_mask"):
+            c_emb, c_mask = self.state_encoder.forward_with_mask(states)
+        else:
+            c_emb = self.state_encoder(states)
+            c_mask = None
+
+        if hasattr(self.constraint_encoder, "forward_with_mask"):
+            k_emb, k_mask = self.constraint_encoder.forward_with_mask(target_cand)
+        else:
+            k_emb = self.constraint_encoder(target_cand)
+            k_mask = None
 
         # 2. Pooling (Epistemic Sieve)
-        q_state = cast(BelnapState, self.q_mpa(q_emb))
-        c_state = cast(BelnapState, self.c_mpa(c_emb))
-        k_state = cast(BelnapState, self.k_mpa(k_emb))
+        q_state = cast(BelnapState, self.q_mpa(q_emb, mask=q_mask))
+        c_state = cast(BelnapState, self.c_mpa(c_emb, mask=c_mask))
+        k_state = cast(BelnapState, self.k_mpa(k_emb, mask=k_mask))
 
         # 3. Cascaded Cross-Attention Reasoning Core
         stage_names = ["post_pooling"]

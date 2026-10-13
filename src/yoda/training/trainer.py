@@ -83,6 +83,8 @@ class YodaTrainer:
         lr_decay: float = 0.75,
         belnap_weight: float = 1.0,
         ltn_weight: float = 0.1,
+        decisiveness_weight: float = 0.1,
+        decisiveness_warmup_epochs: int = 0,
         assertion_weight: float = 0.0,
         focal_gamma: float = 2.0,
         margin: float = 0.2,
@@ -113,6 +115,8 @@ class YodaTrainer:
             belnap_weight: Weight coefficient lambda for FuzzyBelnapLoss regularization
                 (default: 1.0).
             ltn_weight: Weight coefficient for LTNConstraintLoss regularization.
+            decisiveness_weight: Target weight coefficient for contradiction penalty.
+            decisiveness_warmup_epochs: Number of epochs for linear warmup of contradiction penalty.
             assertion_weight: Weight coefficient for assertion loss regularization.
             focal_gamma: Focusing exponent for FocalLoss.
             margin: Target separation margin for MarginLoss.
@@ -156,6 +160,8 @@ class YodaTrainer:
         self.lr_decay = float(lr_decay)
         self.belnap_weight = float(belnap_weight)
         self.ltn_weight = float(ltn_weight)
+        self.decisiveness_weight = float(decisiveness_weight)
+        self.decisiveness_warmup_epochs = max(0, int(decisiveness_warmup_epochs))
         self.assertion_weight = float(assertion_weight)
         self.current_ltn_w: float = self.ltn_weight
         self.current_assertion_w: float = self.assertion_weight
@@ -191,7 +197,10 @@ class YodaTrainer:
             reduction="mean",
         )
         self.belnap_loss_fn = FuzzyBelnapLoss(reduction="mean")
-        self.ltn_criterion = LTNConstraintLoss()
+        self.ltn_criterion = LTNConstraintLoss(
+            decisiveness_weight=self.decisiveness_weight,
+            warmup_epochs=self.decisiveness_warmup_epochs,
+        )
 
         if tensorboard_dir is not None:
             self.writer: SummaryWriter | None = SummaryWriter(log_dir=str(tensorboard_dir))
@@ -711,6 +720,8 @@ class YodaTrainer:
         epochs_without_improvement = 0
         try:
             for epoch in range(1, epochs + 1):
+                # Update LTN decisiveness warmup schedule (epoch - 1 is 0-indexed)
+                self.ltn_criterion.step_epoch(epoch - 1)
                 train_metrics = self.train_epoch(train_loader)
                 current_lr = float(self.optimizer.param_groups[0]["lr"])
                 epoch_record: dict[str, float] = {
@@ -724,6 +735,7 @@ class YodaTrainer:
                     "train_ltn_loss": train_metrics.get("ltn_loss", 0.0),
                     "train_assertion_loss": train_metrics.get("assertion_loss", 0.0),
                     "train_accuracy": train_metrics["accuracy"],
+                    "decisiveness_weight": self.ltn_criterion.current_decisiveness_weight,
                 }
 
                 eval_str = ""
@@ -782,6 +794,11 @@ class YodaTrainer:
                         "train/assertion_loss", epoch_record["train_assertion_loss"], epoch
                     )
                     self.writer.add_scalar("train/accuracy", epoch_record["train_accuracy"], epoch)
+                    self.writer.add_scalar(
+                        "train/decisiveness_weight",
+                        self.ltn_criterion.current_decisiveness_weight,
+                        epoch,
+                    )
                     if eval_loader is not None:
                         self.writer.add_scalar("eval/loss", epoch_record["eval_loss"], epoch)
                         self.writer.add_scalar("eval/ce_loss", epoch_record["eval_ce_loss"], epoch)

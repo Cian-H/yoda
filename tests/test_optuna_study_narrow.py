@@ -28,7 +28,7 @@ def test_fixed_parameters_consistency() -> None:
     assert FIXED_N_HEADS == 2
     assert FIXED_T0_EPOCHS == 3
     assert FIXED_T_MULT == 2
-    assert FIXED_RESIDUAL_WEIGHT == 0.6356
+    assert FIXED_RESIDUAL_WEIGHT == 0.15
     assert FIXED_DROPOUT == 0.2857
     assert FIXED_MARGIN_WEIGHT == 0.6180
 

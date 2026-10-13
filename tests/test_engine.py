@@ -61,6 +61,39 @@ class TestBelnapDecisionHead:
         assert out["logits"].shape == (batch_size, num_choices)
         assert out["choice"].shape == (batch_size,)
 
+    def test_epistemic_logit_gating_zero_knowledge_suppression(self) -> None:
+        """Verifies zero knowledge (k=0) suppresses logits to 0 regardless of pre-activations."""
+        head = BelnapDecisionHead(d_model=32, num_choices=1)
+        state_zero = BelnapState(e_pos=torch.zeros(2, 32), e_neg=torch.zeros(2, 32))
+        out = head(state_zero)
+        assert torch.all(torch.abs(out["logits"]) < 1e-4)
+        assert torch.all(out["knowledge"] == 0.0)
+
+    def test_epistemic_logit_gating_multi_choice_zero_evidence(self) -> None:
+        """Verifies multi-choice head suppresses all choice logits when evidence is zero."""
+        head = BelnapDecisionHead(d_model=32, num_choices=5)
+        state_zero = BelnapState(e_pos=torch.zeros(3, 4, 32), e_neg=torch.zeros(3, 4, 32))
+        out = head(state_zero)
+        assert torch.all(torch.abs(out["logits"]) < 1e-4)
+        assert torch.all(out["knowledge"] == 0.0)
+
+    def test_epistemic_logit_gating_with_bilinear_candidate_states(self) -> None:
+        """Verifies bilinear candidate scoring suppresses logits for zero-evidence candidates."""
+        head = BelnapDecisionHead(d_model=32, num_choices=1)
+        final_state = BelnapState(e_pos=torch.ones(2, 32), e_neg=torch.zeros(2, 32))
+        cand_state_zero = BelnapState(e_pos=torch.zeros(2, 32), e_neg=torch.zeros(2, 32))
+        out = head(final_state, candidate_states=cand_state_zero)
+        assert torch.all(torch.abs(out["logits"]) < 1e-4)
+        assert torch.all(out["knowledge"] == 0.0)
+
+    def test_epistemic_logit_gating_unattenuated_decisive_state(self) -> None:
+        """Verifies that a decisive state (k=0.5, truth=1.0) transmits non-zero positive logits."""
+        head = BelnapDecisionHead(d_model=32, num_choices=1)
+        state_decisive = BelnapState(e_pos=torch.ones(1, 32), e_neg=torch.zeros(1, 32))
+        out = head(state_decisive)
+        assert out["knowledge"].item() > 0.4
+        assert out["logits"].item() > 0.0
+
 
 class TestYodaDecisionEngine:
     """Verifies end-to-end integration across Encoders, Belnap MPA, and Reasoning Core."""

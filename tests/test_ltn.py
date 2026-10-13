@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from yoda.nesy import LTNConstraintLoss
@@ -41,11 +42,13 @@ def test_ltn_constraint_loss_forward():
     criterion = LTNConstraintLoss()
     loss = criterion(outputs, task_scalars)
 
-    # Verify backward pass works
+    # Verify backward pass works: positive support XOR and contradiction penalty
+    # propagate directly into choice_pos and choice_neg
     loss.backward()
     assert outputs["choice_pos"].grad is not None
     assert outputs["choice_neg"].grad is not None
-    assert outputs["truth"].grad is not None
+    # Truth coordinate is no longer involved in XOR/OR loss
+    assert outputs["truth"].grad is None
 
     # Expected NC Loss: mean of choice_pos * choice_neg
     # = mean of:
@@ -145,7 +148,9 @@ def test_grouped_multi_choice_or_constraint() -> None:
     loss = criterion(outputs, task_scalars=task_scalars, group_ids=group_ids)
     assert loss > 0.0
     loss.backward()
-    assert truth.grad is not None
+    assert choice_pos.grad is not None
+    assert choice_pos.grad[:3].abs().sum() > 0.0
+    assert choice_pos.grad[3:].abs().sum() > 0.0
 
 
 def test_boundedness_constraint_for_scoring() -> None:
@@ -213,13 +218,18 @@ def test_hierarchical_implication_constraint() -> None:
 
 
 def test_ltn_init_decisiveness_weight() -> None:
-    """Verifies default and custom decisiveness regularization weight."""
+    """Verifies default and custom decisiveness regularization weight and warmup."""
     criterion = LTNConstraintLoss()
     assert hasattr(criterion, "decisiveness_weight")
     assert criterion.decisiveness_weight == 0.1
+    assert hasattr(criterion, "current_decisiveness_weight")
+    assert criterion.current_decisiveness_weight == 0.1
+    assert criterion.warmup_epochs == 0
 
-    custom_criterion = LTNConstraintLoss(decisiveness_weight=0.25)
+    custom_criterion = LTNConstraintLoss(decisiveness_weight=0.25, warmup_epochs=3)
     assert custom_criterion.decisiveness_weight == 0.25
+    assert custom_criterion.warmup_epochs == 3
+    assert custom_criterion.current_decisiveness_weight == 0.0
 
 
 def test_no_universal_bivalence_penalty() -> None:
@@ -246,20 +256,20 @@ def test_no_universal_bivalence_penalty() -> None:
 
 
 def test_decisiveness_penalty() -> None:
-    """Verifies decisiveness penalty penalizes fence-sitting at 0.5 and rewards 0.0 / 1.0."""
+    """Verifies paraconsistent contradiction penalty (Both) and Belnap properties."""
     criterion = LTNConstraintLoss(decisiveness_weight=0.2)
 
-    # Fence-sitting state: pos=0.5, neg=0.5 -> pos*(1-pos) = 0.25, neg*(1-neg) = 0.25
-    # Total per element = 0.5, mean = 0.5, loss = 0.5 * 0.2 = 0.1
+    # Fence-sitting state: pos=0.5, neg=0.5 -> pos*neg = 0.25
+    # Total per element = 0.25, mean = 0.25, loss = 0.25 * 0.2 = 0.05
     outputs_fence = {
         "choice_pos": torch.full((1, 4), 0.5),
         "choice_neg": torch.full((1, 4), 0.5),
         "truth": torch.full((1, 4), 0.5),
     }
     loss_fence = criterion(outputs_fence)
-    assert torch.isclose(loss_fence, torch.tensor(0.1))
+    assert torch.isclose(loss_fence, torch.tensor(0.05))
 
-    # Decisive state: pos=1.0, neg=0.0 -> pos*(1-pos)=0.0, neg*(1-neg)=0.0 -> penalty = 0.0
+    # Decisive state: pos=1.0, neg=0.0 -> pos*neg=0.0 -> penalty = 0.0
     outputs_decisive = {
         "choice_pos": torch.ones((1, 4)),
         "choice_neg": torch.zeros((1, 4)),
@@ -268,7 +278,25 @@ def test_decisiveness_penalty() -> None:
     loss_decisive = criterion(outputs_decisive)
     assert torch.isclose(loss_decisive, torch.tensor(0.0))
 
-    # Gradient pushes away from 0.5:
+    # Neither state (uninformative): pos=0.0, neg=0.0 -> pos*neg=0.0 -> penalty = 0.0
+    outputs_neither = {
+        "choice_pos": torch.zeros((1, 4)),
+        "choice_neg": torch.zeros((1, 4)),
+        "truth": torch.full((1, 4), 0.5),
+    }
+    loss_neither = criterion(outputs_neither)
+    assert torch.isclose(loss_neither, torch.tensor(0.0))
+
+    # Both state (contradiction): pos=1.0, neg=1.0 -> pos*neg=1.0 -> penalty = 0.2
+    outputs_both = {
+        "choice_pos": torch.ones((1, 4)),
+        "choice_neg": torch.ones((1, 4)),
+        "truth": torch.full((1, 4), 0.5),
+    }
+    loss_both = criterion(outputs_both)
+    assert torch.isclose(loss_both, torch.tensor(0.2))
+
+    # Gradient pushes down positive evidence proportionally to conflicting negative evidence:
     pos = torch.tensor([0.4, 0.6], requires_grad=True)
     neg = torch.tensor([0.4, 0.6], requires_grad=True)
     outputs_grad = {
@@ -278,8 +306,29 @@ def test_decisiveness_penalty() -> None:
     }
     loss = criterion(outputs_grad)
     loss.backward()
-    # At 0.4 (< 0.5): gradient is positive (pushes down towards 0)
+    # dL/d(pos) = (neg / N) * decisiveness_weight = [0.4/2 * 0.2, 0.6/2 * 0.2] = [0.04, 0.06] > 0
     assert pos.grad is not None
     assert pos.grad[0] > 0.0
-    # At 0.6 (> 0.5): gradient is negative (pushes up towards 1)
-    assert pos.grad[1] < 0.0
+    assert pos.grad[1] > 0.0
+    assert pos.grad[1] > pos.grad[0]
+
+
+def test_positive_support_neither_zero_penalty():
+    """R3: Verifies unchosen Neither options (e+=0, e-=0) incur zero penalty in XOR and OR."""
+    criterion = LTNConstraintLoss()
+
+    # XOR with 1 chosen candidate and 3 unmentioned Neither candidates
+    xor_pos = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    xor_loss = criterion._compute_xor(xor_pos)
+    assert pytest.approx(xor_loss.item(), abs=1e-5) == 0.0
+
+    # OR with 1 chosen candidate and 3 unmentioned Neither candidates
+    or_pos = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    or_loss = criterion._compute_or(or_pos)
+    assert pytest.approx(or_loss.item(), abs=1e-5) == 0.0
+
+    # Aliases
+    assert hasattr(criterion, "_compute_xor_positive_support")
+    assert hasattr(criterion, "_compute_or_positive_support")
+    assert pytest.approx(criterion._compute_xor_positive_support(xor_pos).item(), abs=1e-5) == 0.0
+    assert pytest.approx(criterion._compute_or_positive_support(or_pos).item(), abs=1e-5) == 0.0

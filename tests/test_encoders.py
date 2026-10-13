@@ -167,3 +167,80 @@ def test_architecture_package_exports() -> None:
     assert hasattr(arch, "TextEncoder")
     assert hasattr(arch, "SymbolicStateEncoder")
     assert hasattr(arch, "ConstraintEncoder")
+
+
+def test_text_encoder_forward_with_mask_dummy() -> None:
+    """Verifies TextEncoder.forward_with_mask returns valid embeddings and boolean mask."""
+    encoder = TextEncoder("dummy", target_dim=32)
+    texts = ["word", "three words here", ""]
+    emb, mask = encoder.forward_with_mask(texts)
+
+    assert isinstance(emb, torch.Tensor)
+    assert isinstance(mask, torch.Tensor)
+    assert emb.shape == (3, 3, 32)
+    assert mask.shape == (3, 3)
+    assert mask.dtype == torch.bool
+    # Text 0 has 1 word -> mask[0, 0] is True, rest False
+    assert mask[0, 0].item() is True
+    assert mask[0, 1].item() is False
+    # Text 1 has 3 words -> all True
+    assert mask[1].all().item() is True
+    # Text 2 is empty -> all False
+    assert not mask[2].any().item()
+
+
+def test_text_encoder_forward_with_mask_hf() -> None:
+    """Verifies TextEncoder.forward_with_mask propagates HuggingFace tokenizer mask."""
+    mock_tokenizer = MagicMock()
+    mock_model = MagicMock()
+    mock_model.config.hidden_size = 64
+    mock_model.to.return_value = mock_model
+
+    mock_inputs = {
+        "input_ids": torch.ones(2, 4, dtype=torch.long),
+        "attention_mask": torch.tensor([[1, 1, 0, 0], [1, 1, 1, 1]], dtype=torch.long),
+    }
+    mock_tokenizer.return_value.to.return_value = mock_inputs
+
+    mock_output = MagicMock()
+    mock_output.last_hidden_state = torch.randn(2, 4, 64)
+    mock_model.return_value = mock_output
+
+    with (
+        patch("transformers.AutoTokenizer.from_pretrained", return_value=mock_tokenizer),
+        patch("transformers.AutoModel.from_pretrained", return_value=mock_model),
+    ):
+        encoder = TextEncoder(model_name="mock-model", target_dim=64)
+        emb, mask = encoder.forward_with_mask(["short", "longer text"])
+
+        assert emb.shape == (2, 4, 64)
+        assert mask.shape == (2, 4)
+        assert mask.dtype == torch.bool
+        assert not mask[0, 2].item()
+        assert mask[1, 3].item()
+
+
+def test_symbolic_state_encoder_forward_with_mask() -> None:
+    """Verifies SymbolicStateEncoder.forward_with_mask propagates mask."""
+    encoder = SymbolicStateEncoder(TextEncoder("dummy", target_dim=32))
+    states: list[dict[str, Any]] = [{"k": "v"}, {"a": 1, "b": 2, "c": 3}]
+    emb, mask = encoder.forward_with_mask(states)
+
+    assert isinstance(emb, torch.Tensor)
+    assert isinstance(mask, torch.Tensor)
+    assert emb.shape[0] == 2
+    assert mask.shape[0] == 2
+    assert mask.dtype == torch.bool
+
+
+def test_constraint_encoder_forward_with_mask() -> None:
+    """Verifies ConstraintEncoder.forward_with_mask propagates mask."""
+    encoder = ConstraintEncoder(TextEncoder("dummy", target_dim=32))
+    constraints: list[list[str]] = [["rule1"], ["rule1", "rule2", "rule3"]]
+    emb, mask = encoder.forward_with_mask(constraints)
+
+    assert isinstance(emb, torch.Tensor)
+    assert isinstance(mask, torch.Tensor)
+    assert emb.shape[0] == 2
+    assert mask.shape[0] == 2
+    assert mask.dtype == torch.bool

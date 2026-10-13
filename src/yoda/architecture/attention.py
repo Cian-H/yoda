@@ -143,13 +143,17 @@ class BelnapMultiheadPooledAttention(nn.Module):
 
     def __init__(
         self,
-        embed_dim: int,
+        embed_dim: int | None = None,
         num_queries: int = 4,
         num_heads: int | None = None,
         init_bias: float = 0.0,
-        include_projection: bool = True,
+        include_projection: bool | None = None,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
+        *,
+        d_model: int | None = None,
+        num_probes: int | None = None,
+        n_heads: int | None = None,
     ) -> None:
         """Initializes BelnapMultiheadPooledAttention.
 
@@ -159,47 +163,63 @@ class BelnapMultiheadPooledAttention(nn.Module):
             num_heads: Number of attention heads. Defaults to 4, 2, or 1 based on embed_dim.
             init_bias: Initial bias for BelnapAttention output projections. Defaults to 0.0.
             include_projection: Whether to instantiate the dense output projection layer
-                `self.proj`. Defaults to True for backward compatibility. If False, avoids
-                allocating unused parameters when only `BelnapState` is needed.
+                `self.proj`. Defaults to False when initialized via `num_probes` (probes interface),
+                or True when initialized with `num_queries` (for backward compatibility).
             device: Target execution device.
             dtype: Target execution data type.
+            d_model: Alias for embed_dim.
+            num_probes: Alias for num_queries.
+            n_heads: Alias for num_heads.
         """
         super().__init__()
-        if num_heads is None:
-            num_heads = 4 if embed_dim % 4 == 0 else (2 if embed_dim % 2 == 0 else 1)
+        effective_embed_dim = embed_dim if embed_dim is not None else d_model
+        if effective_embed_dim is None:
+            raise ValueError("embed_dim or d_model must be specified.")
+        effective_num_queries = num_probes if num_probes is not None else num_queries
+        effective_num_heads = n_heads if n_heads is not None else num_heads
+        if effective_num_heads is None:
+            effective_num_heads = (
+                4 if effective_embed_dim % 4 == 0 else (2 if effective_embed_dim % 2 == 0 else 1)
+            )
 
-        self.embed_dim = embed_dim
-        self.num_queries = num_queries
-        self.num_heads = num_heads
-        self.include_projection = include_projection
+        if include_projection is None:
+            effective_include_projection = num_probes is None
+        else:
+            effective_include_projection = include_projection
+
+        self.embed_dim = effective_embed_dim
+        self.d_model = effective_embed_dim
+        self.num_queries = effective_num_queries
+        self.num_heads = effective_num_heads
+        self.include_projection = effective_include_projection
 
         # Epistemic learnable query probes for positive and negative evidence
         self.raw_q_pos = nn.Parameter(
-            torch.empty(1, num_queries, embed_dim, device=device, dtype=dtype)
+            torch.empty(1, self.num_queries, self.embed_dim, device=device, dtype=dtype)
         )
         self.raw_q_neg = nn.Parameter(
-            torch.empty(1, num_queries, embed_dim, device=device, dtype=dtype)
+            torch.empty(1, self.num_queries, self.embed_dim, device=device, dtype=dtype)
         )
         nn.init.uniform_(self.raw_q_pos, -0.5, 0.5)
         nn.init.uniform_(self.raw_q_neg, -0.5, 0.5)
 
         # Input adapter projection for raw continuous tensors
-        self.input_proj = nn.Linear(embed_dim, 2 * embed_dim, device=device, dtype=dtype)
-        self.softexp = SoftExp(in_features=2 * embed_dim, device=device, dtype=dtype)
+        self.input_proj = nn.Linear(self.embed_dim, 2 * self.embed_dim, device=device, dtype=dtype)
+        self.softexp = SoftExp(in_features=2 * self.embed_dim, device=device, dtype=dtype)
 
         # Belnap bipolar cross-attention
         self.belnap_attn = BelnapAttention(
-            d_model=embed_dim,
-            n_heads=num_heads,
+            d_model=self.embed_dim,
+            n_heads=self.num_heads,
             bias=True,
             init_bias=init_bias,
         )
 
         # Optional output projection from concatenated dual evidence features to latent vector
-        if include_projection:
+        if self.include_projection:
             self.proj: nn.Linear | None = nn.Linear(
-                num_queries * 2 * embed_dim,
-                embed_dim,
+                self.num_queries * 2 * self.embed_dim,
+                self.embed_dim,
                 device=device,
                 dtype=dtype,
             )
@@ -209,11 +229,11 @@ class BelnapMultiheadPooledAttention(nn.Module):
         logger.debug(
             "architecture.belnap_mpa.init",
             extra={
-                "embed_dim": embed_dim,
-                "num_queries": num_queries,
-                "num_heads": num_heads,
+                "embed_dim": self.embed_dim,
+                "num_queries": self.num_queries,
+                "num_heads": self.num_heads,
                 "init_bias": init_bias,
-                "include_projection": include_projection,
+                "include_projection": self.include_projection,
             },
         )
 
