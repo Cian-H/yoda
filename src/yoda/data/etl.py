@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,14 @@ def match_target_to_constraints(target: Any, raw_constraints: list[str]) -> int 
             return None
         target = max(target.items(), key=lambda kv: kv[1])[0]
 
+    # Ordinal index targets: JSON integer gold labels (e.g. Nimble rubric/score
+    # questions and n4ze3m/kev synthetic rows) address the constraint list
+    # directly instead of matching constraint text.
+    if isinstance(target, int) and not isinstance(target, bool):
+        if 0 <= target < len(raw_constraints):
+            return target
+        return None
+
     target_str = str(target).strip()
 
     # 1. Exact match or prefix match before colon (e.g. "A1" matches "A1: Option A1")
@@ -51,6 +60,35 @@ def match_target_to_constraints(target: Any, raw_constraints: list[str]) -> int 
             return idx
 
     return None
+
+
+def _record_tags(
+    record: dict[str, Any],
+    metadata: dict[str, Any],
+) -> tuple[str, str, Any]:
+    """Extracts the source, question type, and constraints tags of a record."""
+    rec_source = str(metadata.get("source", "unknown"))
+    q_type = str(metadata.get("question_type", "null"))
+    raw_constraints = record.get("constraints", [])
+    return rec_source, q_type, raw_constraints
+
+
+def _pad_choices(raw_constraints: list[str], max_choices: int) -> list[str]:
+    """Truncates and right-pads the choice list to the standardized width."""
+    active_choices = [str(c) for c in raw_constraints[:max_choices]]
+    return active_choices + ["none: Unused option"] * (max_choices - len(active_choices))
+
+
+def _record_state(record: dict[str, Any]) -> dict[str, Any]:
+    """Extracts the symbolic state dictionary from an aggregated record."""
+    context = record.get("context")
+    if isinstance(context, dict) and "symbolic_state" in context:
+        return context["symbolic_state"] if isinstance(context["symbolic_state"], dict) else {}
+    if isinstance(record.get("state"), dict):
+        return record["state"]
+    if isinstance(context, dict):
+        return context
+    return {}
 
 
 class ParquetETLPipeline:
@@ -90,6 +128,8 @@ class ParquetETLPipeline:
         sources: list[str] = []
 
         task_scalar_map = {"null": -1.0, "score": 0.0, "choice": 1.0}
+        skipped_unmatched: Counter[str] = Counter()
+        skipped_truncated: Counter[str] = Counter()
 
         with src_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -106,41 +146,27 @@ class ParquetETLPipeline:
                 if not isinstance(metadata, dict):
                     metadata = {}
 
-                # Source filtering
-                rec_source = metadata.get("source", "unknown")
+                rec_source, q_type, raw_constraints = _record_tags(record, metadata)
                 if source is not None and rec_source != source:
                     continue
-
-                # Question type filtering
-                q_type = str(metadata.get("question_type", "null"))
                 if question_type is not None and q_type != question_type:
                     continue
-
-                raw_constraints = record.get("constraints", [])
                 if not isinstance(raw_constraints, list):
                     continue
 
                 target = metadata.get("target")
                 matched_idx = match_target_to_constraints(target, raw_constraints)
-                if matched_idx is None or matched_idx >= self.max_choices:
+                if matched_idx is None:
+                    skipped_unmatched[rec_source] += 1
+                    continue
+                if matched_idx >= self.max_choices:
+                    skipped_truncated[rec_source] += 1
                     continue
 
-                active_choices = [str(c) for c in raw_constraints[: self.max_choices]]
-                num_active = len(active_choices)
-                padded_choices = active_choices + ["none: Unused option"] * (
-                    self.max_choices - num_active
-                )
+                padded_choices = _pad_choices(raw_constraints, self.max_choices)
+                num_active = min(len(raw_constraints), self.max_choices)
 
-                # Extract state
-                context = record.get("context")
-                if isinstance(context, dict) and "symbolic_state" in context:
-                    state = context["symbolic_state"]
-                elif "state" in record and isinstance(record["state"], dict):
-                    state = record["state"]
-                elif isinstance(context, dict):
-                    state = context
-                else:
-                    state = {}
+                state = _record_state(record)
 
                 query = str(record.get("query", ""))
                 task_scalar = task_scalar_map.get(q_type, -1.0)
@@ -186,6 +212,14 @@ class ParquetETLPipeline:
             "data.etl.completed",
             extra={"output_path": str(dst_path), "rows": len(df)},
         )
+        if skipped_unmatched or skipped_truncated:
+            logger.warning(
+                "data.etl.records_skipped",
+                extra={
+                    "unmatched_targets": dict(skipped_unmatched),
+                    "targets_beyond_max_choices": dict(skipped_truncated),
+                },
+            )
         return df
 
 

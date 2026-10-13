@@ -56,6 +56,31 @@ def test_target_matching() -> None:
     assert match_target_to_constraints("NonExistent", raw) is None
 
 
+def test_target_matching_ordinal_integer_targets() -> None:
+    """Integer gold targets (Nimble rubric/score rows) address constraints by index."""
+    raw = [
+        "No adjustment: the case is ineligible.",
+        "Minimal adjustment: $0.01 through $24.",
+        "Moderate adjustment: $25.00 through $59.99.",
+    ]
+    assert match_target_to_constraints(0, raw) == 0
+    assert match_target_to_constraints(2, raw) == 2
+
+
+def test_target_matching_integer_out_of_range_returns_none() -> None:
+    """Out-of-range ordinal targets must not silently index into the choice list."""
+    raw = ["a: Option A", "b: Option B"]
+    assert match_target_to_constraints(5, raw) is None
+    assert match_target_to_constraints(-1, raw) is None
+
+
+def test_target_matching_boolean_targets_are_not_ordinal_indices() -> None:
+    """Booleans are Python ints but must never be read as constraint indices."""
+    raw = ["a: Option A", "b: Option B"]
+    assert match_target_to_constraints(True, raw) is None
+    assert match_target_to_constraints(False, raw) is None
+
+
 def test_parquet_etl_pipeline(mock_jsonl: Path, tmp_path: Path) -> None:
     out_parquet = tmp_path / "out.parquet"
     etl = ParquetETLPipeline(max_choices=5)

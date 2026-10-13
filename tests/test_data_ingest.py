@@ -7,33 +7,41 @@ from yoda.data.ingest import DatasetIngestionPipeline
 
 
 def test_parse_nimble_record() -> None:
-    """Verifies transformation of raw Nimble record into valid DecisionPayload."""
+    """Verifies transformation of a real-schema Nimble record into a DecisionPayload.
+
+    Real Nimble records encode gold decisions under ``reference.target`` (a
+    criteria key), carry dialogue-event states, and identify the
+    base/counterfactual variant via the record id suffix.
+    """
     pipeline = DatasetIngestionPipeline(data_root="data")
 
     raw_nimble = {
-        "id": "nimble-test-1",
+        "id": "scale-diverse-013-002-base",
         "domain": "commerce",
         "family": "commerce-01",
+        "variant": "base",
         "input": {
-            "state": "Customer wants to return an unopened item 35 days after purchase.",
+            "state": [
+                {
+                    "speaker": "Account reviewer",
+                    "text": "The subscriber's account records a $24 retention offer.",
+                },
+            ],
             "questions": {
                 "decision": {
                     "type": "choice",
-                    "instructions": "Determine the routing action under the policy.",
+                    "instructions": "Choose the authorized resolution.",
                     "criteria": {
-                        "deny": "Deny return over 45 days.",
-                        "manager_review": "Review allowed for 31-45 days if unopened.",
+                        "apply_credit_keep_annual": "Add the $24 credit and preserve the plan.",
+                        "deny": "Deny the correction request.",
                     },
                 }
             },
         },
-        "teacher": {
-            "answers": {
-                "decision": {
-                    "choice": "manager_review",
-                    "confidence": 0.98,
-                }
-            }
+        "reference": {
+            "human_reviewed": False,
+            "source": "policy",
+            "target": "apply_credit_keep_annual",
         },
     }
 
@@ -42,14 +50,75 @@ def test_parse_nimble_record() -> None:
     p = payloads[0]
 
     assert isinstance(p, DecisionPayload)
-    assert p.query == "Determine the routing action under the policy."
+    assert p.query == "Choose the authorized resolution."
     assert p.context.symbolic_state == {
-        "text": "Customer wants to return an unopened item 35 days after purchase."
+        "dialogue_or_list": [
+            {
+                "speaker": "Account reviewer",
+                "text": "The subscriber's account records a $24 retention offer.",
+            },
+        ]
     }
-    assert "deny: Deny return over 45 days." in p.constraints
-    assert "manager_review: Review allowed for 31-45 days if unopened." in p.constraints
+    assert "apply_credit_keep_annual: Add the $24 credit and preserve the plan." in p.constraints
+    assert "deny: Deny the correction request." in p.constraints
     assert p.metadata["source"] == "nimble"
-    assert p.metadata["target"] == "manager_review"
+    assert p.metadata["target"] == "apply_credit_keep_annual", (
+        "Gold decision must be read from reference.target, not teacher.answers"
+    )
+
+
+def test_parse_nimble_record_extracts_pair_metadata() -> None:
+    """Base and counterfactual twins must share a pair_id with distinct variants."""
+    pipeline = DatasetIngestionPipeline(data_root="data")
+
+    def make_record(record_id: str) -> dict[str, object]:
+        return {
+            "id": record_id,
+            "input": {
+                "state": "Policy context.",
+                "questions": {
+                    "decision": {
+                        "type": "choice",
+                        "instructions": "Choose the resolution.",
+                        "criteria": {"refund": "Issue refund.", "deny": "Deny request."},
+                    }
+                },
+            },
+            "reference": {"target": "refund"},
+        }
+
+    base = pipeline.parse_nimble_record(make_record("scale-diverse-014-001-base"))[0]
+    counter = pipeline.parse_nimble_record(make_record("scale-diverse-014-001-counterfactual"))[0]
+
+    assert base.metadata["pair_id"] == "scale-diverse-014-001"
+    assert base.metadata["variant"] == "base"
+    assert counter.metadata["pair_id"] == "scale-diverse-014-001"
+    assert counter.metadata["variant"] == "counterfactual", (
+        "Counterfactual twins must be identifiable for paired contrastive evaluation"
+    )
+
+
+def test_parse_nimble_record_without_gold_target_yields_none() -> None:
+    """Records lacking a reference target must still produce payloads with target None."""
+    pipeline = DatasetIngestionPipeline(data_root="data")
+
+    raw_nimble = {
+        "id": "scale-diverse-015-001-base",
+        "input": {
+            "state": "Context.",
+            "questions": {
+                "decision": {
+                    "type": "choice",
+                    "instructions": "Choose.",
+                    "criteria": {"a": "Option A.", "b": "Option B."},
+                }
+            },
+        },
+    }
+
+    payloads = pipeline.parse_nimble_record(raw_nimble)
+    assert len(payloads) == 1
+    assert payloads[0].metadata["target"] is None
 
 
 def test_parse_kev_record() -> None:

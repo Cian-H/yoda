@@ -345,33 +345,55 @@ class DatasetIngestionPipeline:
         )
 
     def parse_nimble_record(self, raw_row: dict[str, Any]) -> list[DecisionPayload]:
-        """Converts a raw Nimble JSONL record into one or more DecisionPayloads."""
+        """Converts a raw Nimble JSONL record into one or more DecisionPayloads.
+
+        Real Nimble records encode gold decisions under ``reference.target`` (a
+        criteria key), carry dialogue-event states, and pair each ``<id>-base``
+        record with a ``<id>-counterfactual`` twin; both the pairing and the
+        variant are preserved in the payload metadata.
+        """
         payloads: list[DecisionPayload] = []
         raw_input = raw_row.get("input", {})
         state_dict = self._normalize_state(raw_input.get("state", ""))
         questions = raw_input.get("questions", {})
 
+        record_id = str(raw_row.get("id", "nimble_anon"))
+        pair_id, id_variant = self._nimble_pair_key(record_id)
+        variant = str(raw_row.get("variant") or id_variant)
+
         base_metadata = {
             "source": "nimble",
-            "record_id": raw_row.get("id", "nimble_anon"),
+            "record_id": record_id,
             "domain": raw_row.get("domain", "general"),
             "family": raw_row.get("family", "unknown"),
+            "variant": variant,
+            "pair_id": pair_id,
         }
-        teacher_answers = raw_row.get("teacher", {}).get("answers", {})
+
+        # Gold decision: reference.target holds the correct criteria key
+        reference = raw_row.get("reference")
+        target_val = reference.get("target") if isinstance(reference, dict) else None
 
         for q_key, q_data in questions.items():
             if not isinstance(q_data, dict):
                 continue
 
-            target_val = None
-            if q_key in teacher_answers:
-                t_ans = teacher_answers[q_key]
-                target_val = t_ans.get("choice") or t_ans.get("noul") or t_ans.get("score")
-
             payloads.append(
                 self._build_payload(q_key, q_data, state_dict, target_val, base_metadata)
             )
         return payloads
+
+    @staticmethod
+    def _nimble_pair_key(record_id: str) -> tuple[str, str]:
+        """Splits a Nimble record id into its (pair_id, variant) pair key.
+
+        Records are named ``<pair_id>-base`` and ``<pair_id>-counterfactual``;
+        ids without a recognized suffix are treated as unpaired.
+        """
+        for suffix in ("-counterfactual", "-base"):
+            if record_id.endswith(suffix):
+                return record_id[: -len(suffix)], suffix[1:]
+        return record_id, "unpaired"
 
     def parse_kev_record(self, raw_row: dict[str, Any], file_tag: str) -> list[DecisionPayload]:
         """Converts a raw Kev JSONL record into one or more DecisionPayloads."""
