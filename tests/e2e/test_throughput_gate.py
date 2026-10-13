@@ -98,4 +98,3 @@ def test_independent_candidate_evaluation_throughput_speedup() -> None:
     assert speedup >= 2.0, (
         f"Independent candidate evaluation speedup reached {speedup:.2f}x (required >= 2.0x)."
     )
-

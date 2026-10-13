@@ -5,12 +5,46 @@ All notable changes to this project will be documented in this file. The format 
 ## [Unreleased]
 
 ### Added
+- Deterministic dummy text encoder (stable crc32 token hashing) for reproducible tests.
+- Bilinear candidate-query alignment in the decision head: centered truth-order affinity,
+  Neither-at-zero evidence, information-mass knowledge gating, and a `logit_scale`
+  ranking temperature (ADR-0019).
+- Group-relative candidate scoring in the engine's independent path: candidates are
+  scored on their deviation from the `(query, state, task)` group mean.
+- Dual-channel negation-equivariant `BelnapFFN` with tied output projection and
+  normalization (ADR-0020).
+- Context encoding deduplication and cross-call memoization with a `use_context_cache`
+  flag; caches are cleared automatically by any gradient-enabled forward (ADR-0021).
+- Requirements-driven Tier-4 e2e acceptance suite (`tests/e2e/`) covering R1-R5.
+- `--decisiveness-weight` and `--decisiveness-warmup-epochs` CLI flags in
+  `experiments/train_yoda.py`; `eval_accuracy` metric alias in `YodaTrainer.evaluate`.
+- Skip telemetry: the Parquet ETL now counts and warns on records dropped for
+  unmatched targets or targets beyond `max_choices`.
+- Nimble ingestion preserves base/counterfactual pairing (`pair_id`, `variant`) in
+  payload metadata.
 ### Changed
 - Switched project versioning to CalVer (`YYYY.MM.MICRO`).
+- Optuna search space realigned to the hardened architecture: `conflation_weight`
+  [0.01, 0.25] log, `residual_weight` [0.10, 0.25], `lr` [1e-5, 5e-4],
+  `decisiveness_weight` [0.001, 0.05] with 1-3 warmup epochs.
+- `YodaTrainer` auto-dispatches grouped candidate batches for `num_choices == 1`
+  engines; `fit()` accepts a `val_loader` alias.
+- `YodaTrainer.fit` residual weight default 0.5 -> 0.15 in `experiments/train_yoda.py`,
+  matching the hardened architecture.
+- `.agents/teamwork/` excluded from ruff (archival agentic session artifacts).
 ### Deprecated
 ### Removed
 - Removed application-centric `SECURITY.md` and `.docs/security/` methodology.
+- Removed satisfied `.docs/todos/` entries from the architectural hardening roadmap.
 ### Fixed
+- Attention mask propagation and sigmoid attention scale normalization by active
+  sequence mass (R1); paraconsistent contradiction loss with linear warmup replacing
+  the decisiveness Jacobian penalty (R2); NeSy XOR/OR positive-support reformulation,
+  coupled cross-polarity routing, and epistemic logit gating (R3).
+- Nimble dataset contributed zero training rows: gold targets are read from
+  `reference.target` instead of a nonexistent `teacher.answers` block, and integer
+  gold targets are matched as ordinals into the constraint list — restoring 6,335
+  dropped records across the nimble, kev, and n4ze3m_synth sources.
 ### Security
 
 ## [2026.10.0] — 2026-10-01

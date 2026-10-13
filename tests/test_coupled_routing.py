@@ -192,9 +192,7 @@ class TestBelnapAttentionCoupledRouting:
         assert torch.allclose(out_neg_kv.truth, out_orig.truth, atol=1e-5)
         assert torch.allclose(out_neg_kv.knowledge, out_orig.knowledge, atol=1e-5)
 
-    def test_full_double_negation_inversion(
-        self, symmetric_attn_layer: BelnapAttention
-    ) -> None:
+    def test_full_double_negation_inversion(self, symmetric_attn_layer: BelnapAttention) -> None:
         """Verifies that negating query AND source token strictly inverts evidence:
         Agg(~Q, ~K, ~V) == ~Agg(Q, K, V).
         """

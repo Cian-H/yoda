@@ -208,7 +208,6 @@ class TestBelnapAttention:
         assert torch.allclose(out_neg_q.e_neg, out_orig.e_pos, atol=1e-5)
 
 
-
 class TestBelnapFFN:
     """Verifies the Bilattice Feed-Forward Network with conflation."""
 

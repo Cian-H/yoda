@@ -450,8 +450,10 @@ class YodaTrainer:
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Computes joint Focal-Margin loss, Belnap loss, LTN loss, and batch accuracy metrics."""
         model_num_choices = getattr(self.model, "num_choices", None)
-        if "candidates" in batch and "candidate_queries" in batch and (
-            self.independent_eval or model_num_choices == 1
+        if (
+            "candidates" in batch
+            and "candidate_queries" in batch
+            and (self.independent_eval or model_num_choices == 1)
         ):
             return self._compute_independent_loss_and_metrics(batch)
         return self._compute_legacy_loss_and_metrics(batch)

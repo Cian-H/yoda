@@ -530,9 +530,7 @@ class TestR5ContextDeduplicationAndSweepRealignment:
         assert "residual_weight" in float_calls
         _, high_res = float_calls["residual_weight"][:2]
         # Residual weight must not allow extreme upper bounds like 0.9
-        assert high_res <= 0.25, (
-            f"Residual weight upper bound should be <= 0.25, got {high_res}"
-        )
+        assert high_res <= 0.25, f"Residual weight upper bound should be <= 0.25, got {high_res}"
 
     @patch("experiments.optuna_study.run_training_trial")
     def test_r5_learning_rate_safe_regime(self, mock_run: MagicMock) -> None:

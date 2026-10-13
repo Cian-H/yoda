@@ -58,9 +58,7 @@ class TestAdversarialPaddingIsolation:
         assert diff_pos < 1e-4, f"Pos diff {diff_pos} exceeded tolerance for pad_len={pad_len}"
         assert diff_neg < 1e-4, f"Neg diff {diff_neg} exceeded tolerance for pad_len={pad_len}"
 
-    @pytest.mark.parametrize(
-        "pad_type", ["all_ones", "all_zeros", "alternating", "high_knowledge"]
-    )
+    @pytest.mark.parametrize("pad_type", ["all_ones", "all_zeros", "alternating", "high_knowledge"])
     def test_adversarial_pad_token_payloads(
         self, attn_layer: BelnapAttention, pad_type: str
     ) -> None:

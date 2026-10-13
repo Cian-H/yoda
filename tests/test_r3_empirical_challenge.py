@@ -108,9 +108,7 @@ class TestCoupledRoutingRefutationPreservation:
             out = layer(q, kv)
             assert out.e_neg.mean().item() > 0.1, f"Failed for n_heads={n_heads}"
 
-    def test_refutation_cross_channel_gradient_flow(
-        self, attn_layer: BelnapAttention
-    ) -> None:
+    def test_refutation_cross_channel_gradient_flow(self, attn_layer: BelnapAttention) -> None:
         """Verifies non-zero gradients flow through cross channels (A_+ V_- and A_- V_+)."""
         d_model = 32
         q = BelnapState(
@@ -220,9 +218,7 @@ class TestDoubleNegationSymmetryAndEquivariance:
         assert torch.allclose(out_neg_kv.truth, out_orig.truth, atol=1e-5)
         assert torch.allclose(out_neg_kv.knowledge, out_orig.knowledge, atol=1e-5)
 
-    def test_full_triple_inversion(
-        self, symmetric_attn_layer: BelnapAttention
-    ) -> None:
+    def test_full_triple_inversion(self, symmetric_attn_layer: BelnapAttention) -> None:
         """Verifies Agg(~Q, ~K, ~V) == ~Agg(Q, K, V)."""
         d_model = 32
         q = BelnapState(e_pos=torch.rand(2, 2, d_model), e_neg=torch.rand(2, 2, d_model))
@@ -462,9 +458,7 @@ class TestEpistemicLogitGatingLowKnowledge:
         assert logit_true > logit_neither > logit_false, "Ordering must preserve truth lattice"
 
     @pytest.mark.parametrize("num_choices", [2, 3, 4, 8, 16])
-    def test_uniform_softmax_probabilities_under_zero_knowledge(
-        self, num_choices: int
-    ) -> None:
+    def test_uniform_softmax_probabilities_under_zero_knowledge(self, num_choices: int) -> None:
         """Under total ignorance (k = 0 for all candidates), probabilities must be strictly 1/K."""
         head = BelnapDecisionHead(d_model=32, num_choices=num_choices)
         zero_state = BelnapState(e_pos=torch.zeros(1, 32), e_neg=torch.zeros(1, 32))
@@ -611,9 +605,7 @@ class TestNeSyPositiveSupportConstraints:
         ),
         num_zeros=st.integers(min_value=1, max_value=10),
     )
-    def test_hypothesis_or_neither_invariance(
-        self, base_vals: list[float], num_zeros: int
-    ) -> None:
+    def test_hypothesis_or_neither_invariance(self, base_vals: list[float], num_zeros: int) -> None:
         """Hypothesis: Appending zeros to ANY positive support vector leaves OR loss invariant."""
         loss_fn = LTNConstraintLoss()
         t_base = torch.tensor(base_vals, dtype=torch.float32)
@@ -900,4 +892,3 @@ class TestScalabilityAndBoundaryRegimes:
         outputs_box = {"choice_pos": pos, "choice_neg": neg, "logits": logits}
         loss_box = loss_fn(outputs_box, task_scalars=torch.tensor([[0.2500]])).item()
         assert loss_box > 0.0  # Boundedness violation
-

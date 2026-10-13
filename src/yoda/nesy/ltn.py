@@ -287,9 +287,7 @@ class LTNConstraintLoss(nn.Module):
             else (choice_pos if choice_pos is not None else truth)
         )
         if support is None or task_scalars is None:
-            raise ValueError(
-                "pos_support (or choice_pos/truth) and task_scalars must be provided."
-            )
+            raise ValueError("pos_support (or choice_pos/truth) and task_scalars must be provided.")
 
         if support.dim() == 1:
             support = support.unsqueeze(0)

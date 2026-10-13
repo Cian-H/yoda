@@ -230,20 +230,22 @@ def test_split_parquet_dataset_non_overlapping(tmp_path: Path) -> None:
     # Generate 100 mock samples
     records = []
     for i in range(100):
-        records.append({
-            "query": f"Query {i}",
-            "choices": [
-                f"Choice {i}_A",
-                f"Choice {i}_B",
-                f"Choice {i}_C",
-                "none: Unused",
-                "none: Unused",
-            ],
-            "target_idx": 0,
-            "task_scalar": 1.0,
-            "state_json": json.dumps({"idx": i}),
-            "num_active": 3,
-        })
+        records.append(
+            {
+                "query": f"Query {i}",
+                "choices": [
+                    f"Choice {i}_A",
+                    f"Choice {i}_B",
+                    f"Choice {i}_C",
+                    "none: Unused",
+                    "none: Unused",
+                ],
+                "target_idx": 0,
+                "task_scalar": 1.0,
+                "state_json": json.dumps({"idx": i}),
+                "num_active": 3,
+            }
+        )
     df = pl.DataFrame(records)
     parquet_path = tmp_path / "mock_100.parquet"
     df.write_parquet(parquet_path)
@@ -277,4 +279,3 @@ def test_split_parquet_dataset_non_overlapping(tmp_path: Path) -> None:
     assert len(tr2) == 30
     assert len(val2) == 4
     assert len(te2) == 4
-
