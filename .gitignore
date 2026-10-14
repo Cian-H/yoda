@@ -82,3 +82,6 @@ checkpoints/*
 
 plots/*
 !plots/.gitkeep
+
+# Scratchpad / temporary scripts
+scratchpad/

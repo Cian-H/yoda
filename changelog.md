@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file. The format 
 ## [Unreleased]
 
 ### Added
+- Local SQLite backup (`data/optuna_v2.db`) and credential-free JSON export
+  (`data/optuna_v2_backup.json`) preserving all 7 Optuna studies and 672 trials
+  from the hosted Neon database.
 - Deterministic dummy text encoder (stable crc32 token hashing) for reproducible tests.
 - Bilinear candidate-query alignment in the decision head: centered truth-order affinity,
   Neither-at-zero evidence, information-mass knowledge gating, and a `logit_scale`
@@ -57,6 +60,9 @@ All notable changes to this project will be documented in this file. The format 
 - `.agents/teamwork/` excluded from ruff (archival agentic session artifacts).
 ### Deprecated
 ### Removed
+- Purged legacy pre-hardening databases and metadata (`data/optuna.db`,
+  `data/optuna_narrow.db`, `data/yoda_sweep_1791233751_metadata.json`,
+  `data/yoda_narrow_sweep_1791462045_metadata.json`).
 - Removed application-centric `SECURITY.md` and `.docs/security/` methodology.
 - Removed satisfied `.docs/todos/` entries from the architectural hardening roadmap.
 - Retired `experiments/optuna_study_focused.py` and
