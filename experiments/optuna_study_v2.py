@@ -347,6 +347,26 @@ def main() -> None:
     args = parser.parse_args()
     args.phase = phase
 
+    # Fail fast on missing data: every trial would prune otherwise. The v2 splits
+    # are gitignored (derived data), so a fresh training host must either receive
+    # them out-of-band or regenerate them with prepare_hpo_split.py.
+    for label, flag, path in (
+        ("train", "--train-path", args.train_path),
+        ("eval", "--eval-path", args.eval_path),
+    ):
+        if path is None or not Path(path).exists():
+            raise SystemExit(
+                f"{label} dataset not found: {path!r}. Run "
+                "`uv run python experiments/prepare_hpo_split.py` first, or pass "
+                f"an explicit {flag}."
+            )
+    if phase == "validate" and (args.test_path is None or not Path(args.test_path).exists()):
+        raise SystemExit(
+            f"test dataset not found: {args.test_path!r}. The validate phase evaluates "
+            "on the locked test split; run "
+            "`uv run python experiments/prepare_hpo_split.py` first."
+        )
+
     study_name = args.study_name or f"yoda_hardened_v2_{phase}"
     study, _ = init_study_and_metadata(
         study_name=study_name,

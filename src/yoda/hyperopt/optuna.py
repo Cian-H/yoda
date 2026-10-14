@@ -11,6 +11,7 @@ Provides reusable abstractions for hyperparameter optimization sweeps:
 
 import argparse
 import json
+import re
 import secrets
 import subprocess
 import time
@@ -244,6 +245,15 @@ def run_training_trial(
         return 0.0
 
 
+def _redact_dsn_password(storage_url: str) -> str:
+    """Masks the password component of a DSN for logs and on-disk metadata.
+
+    The real URL is still used for the storage backend; this redacted form is
+    what may ride to logs or metadata files (which can be committed).
+    """
+    return re.sub(r"(://[^:/@]+:)[^@/]+(@)", r"\1***\2", storage_url)
+
+
 def init_study_and_metadata(
     study_name: str | None = None,
     storage: str | None = None,
@@ -318,7 +328,7 @@ def init_study_and_metadata(
     metadata: dict[str, Any] = {
         "study_name": resolved_study_name,
         "seed": resolved_seed,
-        "storage": resolved_storage_url,
+        "storage": _redact_dsn_password(resolved_storage_url),
         "direction": direction,
         "sampler": type(sampler).__name__,
         "heartbeat_interval": heartbeat_interval,
@@ -336,7 +346,7 @@ def init_study_and_metadata(
         "Initialized study '{}' with seed={} and storage={}",
         resolved_study_name,
         resolved_seed,
-        resolved_storage_url,
+        _redact_dsn_password(resolved_storage_url),
     )
     logger.info("Wrote study metadata to {}", metadata_path)
 

@@ -10,6 +10,7 @@ import pytest
 
 from yoda.hyperopt.optuna import (
     StudyEarlyStoppingCallback,
+    _redact_dsn_password,
     aggregate_metric_values,
     build_base_study_parser,
     build_training_command,
@@ -292,6 +293,37 @@ def test_build_base_study_parser_explicit_paths() -> None:
     args = parser.parse_args(["--eval-path", "e.parquet", "--test-path", "t.parquet"])
     assert args.eval_path == "e.parquet"
     assert args.test_path == "t.parquet"
+
+
+def test_redact_dsn_password() -> None:
+    """DSN passwords are masked for logs/metadata; other URLs pass through."""
+    assert (
+        _redact_dsn_password("postgresql+psycopg://user:secret@host/db?sslmode=require")
+        == "postgresql+psycopg://user:***@host/db?sslmode=require"
+    )
+    assert _redact_dsn_password("sqlite:///data/optuna.db") == "sqlite:///data/optuna.db"
+    assert _redact_dsn_password("postgresql://host/db") == "postgresql://host/db"
+    assert (
+        _redact_dsn_password("postgresql+psycopg://user@host/db")
+        == "postgresql+psycopg://user@host/db"
+    )
+
+
+def test_init_study_metadata_does_not_leak_passwords(tmp_path: Path) -> None:
+    """Study metadata JSON keeps the storage URL but never a credential."""
+    storage = f"sqlite:///{tmp_path}/test.db"
+    _, metadata = init_study_and_metadata(
+        study_name="redaction_test",
+        storage=storage,
+        seed=1,
+        metadata_dir=tmp_path,
+    )
+    assert metadata["storage"] == storage  # sqlite URLs pass through unchanged
+    metadata_file = tmp_path / "redaction_test_metadata.json"
+    with metadata_file.open("r", encoding="utf-8") as f:
+        on_disk = json.load(f)
+    assert on_disk["storage"] == storage
+    assert "secret" not in json.dumps(on_disk).lower()
 
 
 def test_run_training_trial_metric_agg_and_user_attrs(tmp_path: Path) -> None:

@@ -71,6 +71,12 @@ All notable changes to this project will be documented in this file. The format 
   `reference.target` instead of a nonexistent `teacher.answers` block, and integer
   gold targets are matched as ordinals into the constraint list — restoring 6,335
   dropped records across the nimble, kev, and n4ze3m_synth sources.
+- `init_study_and_metadata` redacts the password component of the storage DSN in
+  study metadata JSON and log output, so credentialed Postgres URLs can no longer
+  leak into committable metadata files or logs.
+- `optuna_study_v2.py` fails fast at startup when the v2 split files are missing
+  (validate phase likewise requires the locked test split) instead of pruning
+  every trial against non-existent paths.
 ### Security
 
 ## [2026.10.0] — 2026-10-01

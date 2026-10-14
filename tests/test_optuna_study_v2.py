@@ -216,3 +216,49 @@ def test_resolve_storage_prefers_flag_then_env_then_local(
     monkeypatch.setenv("YODA_OPTUNA_STORAGE", "sqlite:///data/from_env.db")
     assert v2.resolve_storage(None) == "sqlite:///data/from_env.db"
     assert v2.resolve_storage("sqlite:///data/explicit.db") == "sqlite:///data/explicit.db"
+
+
+def test_main_fails_fast_when_split_files_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing v2 split files must abort at startup, not prune every trial."""
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "optuna_study_v2.py",
+            "--phase",
+            "sanity",
+            "--train-path",
+            str(tmp_path / "missing_train.parquet"),
+            "--eval-path",
+            str(tmp_path / "missing_eval.parquet"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="train dataset not found"):
+        v2.main()
+
+
+def test_main_validate_phase_requires_test_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The validate phase must fail fast when the locked test split is missing."""
+    train = tmp_path / "train.parquet"
+    eval_file = tmp_path / "eval.parquet"
+    train.touch()
+    eval_file.touch()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "optuna_study_v2.py",
+            "--phase",
+            "validate",
+            "--train-path",
+            str(train),
+            "--eval-path",
+            str(eval_file),
+            "--test-path",
+            str(tmp_path / "missing_test.parquet"),
+        ],
+    )
+    with pytest.raises(SystemExit, match="test dataset not found"):
+        v2.main()
