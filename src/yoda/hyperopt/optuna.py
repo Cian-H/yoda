@@ -95,12 +95,59 @@ def build_training_command(
     return cmd
 
 
+def aggregate_metric_values(values: list[float], agg: str = "final") -> float:
+    """Aggregates per-epoch metric values into a single objective scalar.
+
+    Args:
+        values: Per-epoch metric values in epoch order (must be non-empty).
+        agg: Aggregation mode: "final" (last epoch), "best" (max over epochs), or
+            "mean_last2" (mean of the last two epochs; dampens cosine-restart phase
+            noise without the upward selection bias of a max).
+
+    Returns:
+        Aggregated metric value.
+
+    Raises:
+        ValueError: If agg is unknown or values is empty.
+    """
+    if agg not in ("final", "best", "mean_last2"):
+        raise ValueError(f"Unknown metric aggregation: {agg!r}")
+    if not values:
+        raise ValueError("Cannot aggregate an empty metric history")
+    if agg == "final":
+        return values[-1]
+    if agg == "best":
+        return max(values)
+    last_two = values[-2:]
+    return sum(last_two) / len(last_two)
+
+
+def extract_metric_value(
+    history: list[dict[str, Any]],
+    metric_name: str = "eval_accuracy",
+    agg: str = "final",
+) -> float:
+    """Extracts an aggregated metric from per-epoch history records.
+
+    Returns 0.0 when no epoch record carries the metric.
+    """
+    values = [
+        float(record[metric_name])
+        for record in history
+        if isinstance(record, dict) and record.get(metric_name) is not None
+    ]
+    if not values:
+        return 0.0
+    return aggregate_metric_values(values, agg=agg)
+
+
 def run_training_trial(
     trial: optuna.Trial,
     trial_dir: Path,
     training_args: dict[str, Any],
     metric_name: str = "eval_accuracy",
     script_path: str = "experiments/train_yoda.py",
+    metric_agg: str = "final",
 ) -> float:
     """Executes a single training trial in an isolated subprocess and extracts target metric.
 
@@ -113,9 +160,11 @@ def run_training_trial(
         training_args: Hyperparameters and flags passed to the training script.
         metric_name: Metric key in history.json to extract and maximize.
         script_path: Training script entry point.
+        metric_agg: Aggregation over per-epoch metric values ("final", "best", or
+            "mean_last2"); see aggregate_metric_values.
 
     Returns:
-        Extracted metric value for the final training epoch.
+        Aggregated metric value for the trial.
 
     Raises:
         optuna.TrialPruned: If the subprocess exits with non-zero status or history.json is missing.
@@ -166,19 +215,30 @@ def run_training_trial(
             logger.warning("history.json in {} is empty or not a list", trial_dir)
             return 0.0
 
-        final_epoch = history[-1]
-        metric_value = final_epoch.get(metric_name)
-        if metric_value is None:
-            logger.warning("Final epoch record missing '{}'", metric_name)
+        values = [
+            float(record[metric_name])
+            for record in history
+            if isinstance(record, dict) and record.get(metric_name) is not None
+        ]
+        if not values:
+            logger.warning("No epoch records with '{}' in {}", metric_name, trial_dir)
             return 0.0
 
+        metric_value = aggregate_metric_values(values, agg=metric_agg)
+        trial.set_user_attr("final_metric", values[-1])
+        trial.set_user_attr("best_metric", max(values))
+        trial.set_user_attr("best_epoch", values.index(max(values)) + 1)
+        trial.set_user_attr("metric_name", metric_name)
+        trial.set_user_attr("metric_agg", metric_agg)
+
         logger.info(
-            "Trial #{} finished with final {}: {:.4f}",
+            "Trial #{} finished with {} {}: {:.4f}",
             trial.number,
+            metric_agg,
             metric_name,
-            float(metric_value),
+            metric_value,
         )
-        return float(metric_value)
+        return metric_value
     except Exception as exc:
         logger.error("Error reading history.json for trial #{}: {}", trial.number, exc)
         return 0.0
@@ -370,6 +430,18 @@ def build_base_study_parser(
         type=str,
         default=None,
         help="Path to the primary dataset",
+    )
+    parser.add_argument(
+        "--eval-path",
+        type=str,
+        default=None,
+        help="Explicit evaluation dataset path (overrides the dynamic 80/10/10 split)",
+    )
+    parser.add_argument(
+        "--test-path",
+        type=str,
+        default=None,
+        help="Explicit held-out test dataset path (overrides the dynamic 80/10/10 split)",
     )
     parser.add_argument(
         "--seed",

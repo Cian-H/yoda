@@ -28,5 +28,6 @@ This directory holds the [Architecture Decision Records (ADRs)](https://cognitec
 | [0019](./0019-centered-bilinear-candidate-alignment-and-group-relative-scoring.md) | Centered Bilinear Candidate Alignment and Group-Relative Scoring | Accepted | 2026-10-13 |
 | [0020](./0020-dual-channel-negation-equivariant-ffn.md) | Dual-Channel Negation-Equivariant Feed-Forward Network | Accepted | 2026-10-13 |
 | [0021](./0021-context-encoding-deduplication-and-memoization.md) | Context Encoding Deduplication and Cross-Call Memoization | Accepted | 2026-10-13 |
+| [0022](./0022-v2-hpo-data-protocol-and-macro-objective.md) | V2 HPO Data Protocol and Macro-Averaged Objective | Accepted | 2026-10-14 |
 
 (Append new ADRs as `NNNN-<kebab-slug>.md` and add a row here in the same commit. See `.agents/rules/workflow.md` for when an ADR is required.)

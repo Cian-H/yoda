@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from experiments.optuna_study_narrow import FIXED_RESIDUAL_WEIGHT
+from experiments.retired.optuna_study_narrow import FIXED_RESIDUAL_WEIGHT
 from yoda.architecture.belnap_transformer import (
     BelnapAttention,
     BelnapDecisionTransformer,

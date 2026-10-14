@@ -10,8 +10,10 @@ import pytest
 
 from yoda.hyperopt.optuna import (
     StudyEarlyStoppingCallback,
+    aggregate_metric_values,
     build_base_study_parser,
     build_training_command,
+    extract_metric_value,
     init_study_and_metadata,
     run_training_trial,
 )
@@ -218,12 +220,14 @@ def test_build_base_study_parser_collapse_flags() -> None:
     assert default_args.collapse_threshold == 0.370
     assert default_args.collapse_patience_epochs == 2
 
-    custom_args = parser.parse_args([
-        "--collapse-threshold",
-        "0.40",
-        "--collapse-patience-epochs",
-        "3",
-    ])
+    custom_args = parser.parse_args(
+        [
+            "--collapse-threshold",
+            "0.40",
+            "--collapse-patience-epochs",
+            "3",
+        ]
+    )
     assert custom_args.collapse_threshold == 0.40
     assert custom_args.collapse_patience_epochs == 3
 
@@ -256,3 +260,67 @@ def test_run_training_trial_seed_randomization(tmp_path: Path) -> None:
         assert seed_val == trial.user_attrs["seed"]
         assert seed_val != 42
 
+
+def test_aggregate_metric_values() -> None:
+    """Verify metric aggregation modes over per-epoch values."""
+    assert aggregate_metric_values([0.4, 0.5, 0.45], agg="final") == 0.45
+    assert aggregate_metric_values([0.4, 0.5, 0.45], agg="best") == 0.5
+    assert aggregate_metric_values([0.4, 0.5, 0.45], agg="mean_last2") == pytest.approx(0.475)
+    assert aggregate_metric_values([0.42], agg="mean_last2") == 0.42
+    with pytest.raises(ValueError, match="Unknown metric aggregation"):
+        aggregate_metric_values([0.4], agg="median")
+    with pytest.raises(ValueError, match="empty"):
+        aggregate_metric_values([], agg="final")
+
+
+def test_extract_metric_value() -> None:
+    """Verify metric extraction from history records, including the missing-metric case."""
+    history = [{"epoch": 1, "eval_accuracy": 0.4}, {"epoch": 2, "eval_accuracy": 0.5}]
+    assert extract_metric_value(history) == 0.5
+    assert extract_metric_value(history, agg="best") == 0.5
+    assert extract_metric_value(history, agg="mean_last2") == pytest.approx(0.45)
+    assert extract_metric_value([{"epoch": 1}]) == 0.0
+    assert extract_metric_value([], agg="best") == 0.0
+
+
+def test_build_base_study_parser_explicit_paths() -> None:
+    """Verify the parser exposes explicit eval/test dataset paths."""
+    parser = build_base_study_parser("Test")
+    args = parser.parse_args([])
+    assert args.eval_path is None
+    assert args.test_path is None
+    args = parser.parse_args(["--eval-path", "e.parquet", "--test-path", "t.parquet"])
+    assert args.eval_path == "e.parquet"
+    assert args.test_path == "t.parquet"
+
+
+def test_run_training_trial_metric_agg_and_user_attrs(tmp_path: Path) -> None:
+    """Verify metric_agg aggregation and audit user attrs on the trial."""
+    study = optuna.create_study(direction="maximize")
+    trial = study.ask()
+    trial_dir = tmp_path / "trial_agg"
+
+    history_data = [
+        {"epoch": 1, "macro_accuracy": 0.40},
+        {"epoch": 2, "macro_accuracy": 0.50},
+        {"epoch": 3, "macro_accuracy": 0.45},
+    ]
+    mock_run = MagicMock()
+    mock_run.returncode = 0
+
+    with (
+        patch("subprocess.run", return_value=mock_run),
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.open"),
+        patch("json.load", return_value=history_data),
+    ):
+        result = run_training_trial(
+            trial, trial_dir, {}, metric_name="macro_accuracy", metric_agg="mean_last2"
+        )
+
+    assert result == pytest.approx(0.475)
+    assert trial.user_attrs["final_metric"] == 0.45
+    assert trial.user_attrs["best_metric"] == 0.5
+    assert trial.user_attrs["best_epoch"] == 2
+    assert trial.user_attrs["metric_name"] == "macro_accuracy"
+    assert trial.user_attrs["metric_agg"] == "mean_last2"

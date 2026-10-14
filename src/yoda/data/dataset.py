@@ -162,6 +162,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
                         "active_choices": active_choices,
                         "target_idx": matched_idx,
                         "question_type": metadata.get("question_type", "null"),
+                        "source": str(metadata.get("source", "unknown")),
                     }
                 )
 
@@ -215,6 +216,7 @@ class YodaDecisionDataset(Dataset[dict[str, Any]]):
             "target_idx": new_target_idx,
             "task_scalar": task_scalar,
             "num_active": num_active,
+            "source": sample.get("source", "unknown"),
         }
 
 
@@ -237,6 +239,7 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
     """
     queries = [item["query"] for item in batch]
     states = [item["state"] for item in batch]
+    sources = [str(item.get("source", "unknown")) for item in batch]
     constraints = [item["constraints"] for item in batch]
     target_indices = torch.tensor([item["target_idx"] for item in batch], dtype=torch.long)
     task_scalars = torch.tensor(
@@ -265,6 +268,7 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
     cand_labels: list[float] = []
     cand_group_ids: list[int] = []
     cand_task_scalars: list[float] = []
+    cand_sources: list[str] = []
     hierarchy_edges: list[tuple[int, int]] = []
 
     cand_offset = 0
@@ -283,6 +287,7 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
             cand_labels.append(1.0 if c_idx == t_idx else 0.0)
             cand_group_ids.append(b_idx)
             cand_task_scalars.append(task_sc)
+            cand_sources.append(sources[b_idx])
 
         edges = item.get("hierarchy_edges")
         if edges:
@@ -294,6 +299,7 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
     batch_dict: dict[str, Any] = {
         "queries": queries,
         "states": states,
+        "sources": sources,
         "constraints": constraints,
         "target_indices": target_indices,
         "task_scalars": task_scalars,
@@ -307,6 +313,7 @@ def collate_decision_batch(batch: list[dict[str, Any]]) -> dict[str, Any]:
         "candidate_task_scalars": (
             torch.tensor(cand_task_scalars, dtype=torch.float32).unsqueeze(-1)
         ),
+        "candidate_sources": cand_sources,
     }
     if hierarchy_edges:
         batch_dict["hierarchy_edges"] = hierarchy_edges

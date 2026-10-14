@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import optuna
 
-from experiments.optuna_study_focused import (
+from experiments.retired.optuna_study_focused import (
     CHAMPION_TRIAL_40_PARAMS,
     FIXED_BACKBONE_LR,
     FIXED_BELNAP_WEIGHT,
@@ -69,7 +69,7 @@ def test_objective_command_construction(tmp_path: Path) -> None:
         train_path=None,
     )
 
-    with patch("experiments.optuna_study_focused.run_training_trial") as mock_runner:
+    with patch("experiments.retired.optuna_study_focused.run_training_trial") as mock_runner:
         mock_runner.return_value = 0.525
         val = objective(trial, args)
 

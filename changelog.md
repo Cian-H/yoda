@@ -22,8 +22,31 @@ All notable changes to this project will be documented in this file. The format 
   unmatched targets or targets beyond `max_choices`.
 - Nimble ingestion preserves base/counterfactual pairing (`pair_id`, `variant`) in
   payload metadata.
+- `experiments/prepare_hpo_split.py`: v2 data protocol — group-disjoint,
+  source-stratified `train`/`optuna_eval`/`test` splits with reproducible
+  hash-based assignment, exact-row dedup, and split metadata (per-source
+  const-predictor rates, derived collapse threshold).
+- `experiments/optuna_study_v2.py`: phased post-hardening study
+  (`sanity`/`broad`/`focused`/`validate`) implementing the council-verdict
+  conditions; local sqlite storage by default, `YODA_OPTUNA_STORAGE` override
+  for distributed runs.
+- `experiments/analyze_study.py`: study analysis — top trials, fANOVA parameter
+  importances, Phase-B lock and top-config exports.
+- `--logit-scale` CLI flag in `experiments/train_yoda.py`;
+  `YodaDecisionEngine` accepts `logit_scale` and forwards it to both decision
+  heads (default 8.0).
+- `--eval-path`/`--test-path` flags in the shared Optuna study parser.
+- Macro-averaged per-source eval accuracy (`macro_accuracy`) in
+  `YodaTrainer.evaluate` and per-epoch history; `source` plumbed through both
+  datasets and `collate_decision_batch`.
+- Metric aggregation (`final`/`best`/`mean_last2`) in `run_training_trial` with
+  final/best metric user attrs; `aggregate_metric_values`/`extract_metric_value`
+  helpers.
+- `scikit-learn` dependency (fANOVA importance analysis).
 ### Changed
 - Switched project versioning to CalVer (`YYYY.MM.MICRO`).
+- Collapse pruning compares the macro-averaged per-source accuracy against the
+  threshold, so per-source positional bias can no longer mask collapse.
 - Optuna search space realigned to the hardened architecture: `conflation_weight`
   [0.01, 0.25] log, `residual_weight` [0.10, 0.25], `lr` [1e-5, 5e-4],
   `decisiveness_weight` [0.001, 0.05] with 1-3 warmup epochs.
@@ -36,6 +59,9 @@ All notable changes to this project will be documented in this file. The format 
 ### Removed
 - Removed application-centric `SECURITY.md` and `.docs/security/` methodology.
 - Removed satisfied `.docs/todos/` entries from the architectural hardening roadmap.
+- Retired `experiments/optuna_study_focused.py` and
+  `experiments/optuna_study_narrow.py` to `experiments/retired/` (stale
+  pre-M4 search spaces; superseded by `optuna_study_v2.py`).
 ### Fixed
 - Attention mask propagation and sigmoid attention scale normalization by active
   sequence mass (R1); paraconsistent contradiction loss with linear warmup replacing

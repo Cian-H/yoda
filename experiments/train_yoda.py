@@ -245,6 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interpolation weight alpha for convex combination residual joins (default: 0.15)",
     )
     parser.add_argument(
+        "--logit-scale",
+        type=float,
+        default=8.0,
+        help="Ranking temperature for bilinear candidate-alignment logits (default: 8.0)",
+    )
+    parser.add_argument(
         "--dropout",
         type=float,
         default=0.0,
@@ -569,6 +575,7 @@ def main() -> None:
         d_hidden_multiplier=args.d_hidden_multiplier,
         residual_weight=args.residual_weight,
         dropout=args.dropout,
+        logit_scale=args.logit_scale,
         device=device,
     )
     model = model.to(device)

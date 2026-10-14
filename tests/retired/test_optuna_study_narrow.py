@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import optuna
 
-from experiments.optuna_study_narrow import (
+from experiments.retired.optuna_study_narrow import (
     CHAMPION_TRIAL_21_PARAMS,
     FIXED_DROPOUT,
     FIXED_MARGIN_WEIGHT,

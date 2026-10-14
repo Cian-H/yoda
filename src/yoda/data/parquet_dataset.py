@@ -63,6 +63,10 @@ class YodaParquetDataset(Dataset[dict[str, Any]]):
         self._num_actives: list[int] = df["num_active"].to_list()
         self._target_indices: list[int] = df["target_idx"].to_list()
         self._task_scalars: list[float] = df["task_scalar"].to_list()
+        if "source" in df.columns:
+            self._sources: list[str] = [str(s) for s in df["source"].to_list()]
+        else:
+            self._sources = ["unknown"] * len(self._queries)
 
         logger.info(
             "data.parquet_dataset.loaded",
@@ -95,7 +99,7 @@ class YodaParquetDataset(Dataset[dict[str, Any]]):
         # Parse lightweight JSON state
         try:
             state = json.loads(self._state_jsons[idx])
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             state = {}
 
         return {
@@ -105,6 +109,7 @@ class YodaParquetDataset(Dataset[dict[str, Any]]):
             "target_idx": new_target_idx,
             "task_scalar": self._task_scalars[idx],
             "num_active": num_active,
+            "source": self._sources[idx],
         }
 
 

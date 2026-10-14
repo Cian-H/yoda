@@ -252,7 +252,7 @@ class YodaTrainer:
     def _compute_independent_loss_and_metrics(
         self,
         batch: dict[str, Any],
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Computes loss and metrics for independent candidate evaluations."""
         c_queries: list[str] = batch["candidate_queries"]
         c_states: list[dict[str, Any]] = batch["candidate_states"]
@@ -317,12 +317,23 @@ class YodaTrainer:
         )
 
         correct_count = 0
+        # Independent path rows are candidate rows: use the per-candidate-row
+        # source list (collated alongside candidate_group_ids).
+        sources = batch.get("candidate_sources")
+        source_correct: dict[str, float] = {}
+        source_total: dict[str, float] = {}
         for gid in unique_groups:
             mask = group_ids == gid
             pred_idx = torch.argmax(logits[mask])
             gt_idx = torch.argmax(labels[mask])
-            if pred_idx == gt_idx:
+            group_correct = bool(pred_idx == gt_idx)
+            if group_correct:
                 correct_count += 1
+            if sources is not None:
+                src = sources[int(torch.nonzero(mask).flatten()[0])]
+                source_total[src] = source_total.get(src, 0.0) + 1.0
+                if group_correct:
+                    source_correct[src] = source_correct.get(src, 0.0) + 1.0
 
         num_groups = len(unique_groups)
         knowledge_mean = out["knowledge"].mean().item() if "knowledge" in out else 0.0
@@ -338,13 +349,15 @@ class YodaTrainer:
             "correct": float(correct_count),
             "total": float(num_groups),
             "knowledge_sum": float(knowledge_mean * num_groups),
+            "source_correct": source_correct,
+            "source_total": source_total,
         }
         return total_loss, metrics
 
     def _compute_legacy_loss_and_metrics(
         self,
         batch: dict[str, Any],
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Computes loss and metrics for legacy fixed-dimension batches."""
         queries: list[str] = batch["queries"]
         states: list[dict[str, Any]] = batch["states"]
@@ -430,6 +443,16 @@ class YodaTrainer:
         correct = (preds == target_indices).sum().item()
         knowledge_mean = out["knowledge"].mean().item() if "knowledge" in out else 0.0
 
+        sources = batch.get("sources")
+        source_correct: dict[str, float] = {}
+        source_total: dict[str, float] = {}
+        if sources is not None:
+            correct_mask = preds == target_indices
+            for row_idx, src in enumerate(sources):
+                source_total[src] = source_total.get(src, 0.0) + 1.0
+                if bool(correct_mask[row_idx]):
+                    source_correct[src] = source_correct.get(src, 0.0) + 1.0
+
         metrics = {
             "loss": total_loss.item(),
             "ce_loss": focal_loss.item(),
@@ -441,13 +464,15 @@ class YodaTrainer:
             "correct": float(correct),
             "total": float(batch_size),
             "knowledge_sum": float(knowledge_mean * batch_size),
+            "source_correct": source_correct,
+            "source_total": source_total,
         }
         return total_loss, metrics
 
     def _compute_loss_and_metrics(
         self,
         batch: dict[str, Any],
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Computes joint Focal-Margin loss, Belnap loss, LTN loss, and batch accuracy metrics."""
         model_num_choices = getattr(self.model, "num_choices", None)
         if (
@@ -621,6 +646,8 @@ class YodaTrainer:
         total_correct = 0.0
         total_samples = 0.0
         total_knowledge = 0.0
+        source_correct: dict[str, float] = {}
+        source_total: dict[str, float] = {}
 
         with torch.no_grad():
             for batch in dataloader:
@@ -640,6 +667,14 @@ class YodaTrainer:
                 total_correct += metrics["correct"]
                 total_samples += b_size
                 total_knowledge += metrics["knowledge_sum"]
+                for src, cnt in (metrics.get("source_correct") or {}).items():
+                    source_correct[src] = source_correct.get(src, 0.0) + cnt
+                for src, cnt in (metrics.get("source_total") or {}).items():
+                    source_total[src] = source_total.get(src, 0.0) + cnt
+                for src, cnt in (metrics.get("source_correct") or {}).items():
+                    source_correct[src] = source_correct.get(src, 0.0) + cnt
+                for src, cnt in (metrics.get("source_total") or {}).items():
+                    source_total[src] = source_total.get(src, 0.0) + cnt
 
         if total_samples == 0.0:
             return {
@@ -652,10 +687,17 @@ class YodaTrainer:
                 "assertion_loss": 0.0,
                 "accuracy": 0.0,
                 "eval_accuracy": 0.0,
+                "macro_accuracy": 0.0,
                 "mean_knowledge": 0.0,
             }
 
         accuracy = total_correct / total_samples
+        macro_accuracy = (
+            sum(source_correct.get(src, 0.0) / total for src, total in source_total.items())
+            / len(source_total)
+            if source_total
+            else accuracy
+        )
         return {
             "loss": total_loss / total_samples,
             "ce_loss": total_ce_loss / total_samples,
@@ -666,6 +708,7 @@ class YodaTrainer:
             "assertion_loss": total_assertion_loss / total_samples,
             "accuracy": accuracy,
             "eval_accuracy": accuracy,
+            "macro_accuracy": macro_accuracy,
             "mean_knowledge": total_knowledge / total_samples,
         }
 
@@ -761,6 +804,9 @@ class YodaTrainer:
                     epoch_record["eval_ltn_loss"] = eval_metrics.get("ltn_loss", 0.0)
                     epoch_record["eval_assertion_loss"] = eval_metrics.get("assertion_loss", 0.0)
                     epoch_record["eval_accuracy"] = eval_metrics["accuracy"]
+                    epoch_record["macro_accuracy"] = eval_metrics.get(
+                        "macro_accuracy", eval_metrics["accuracy"]
+                    )
                     epoch_record["eval_mean_knowledge"] = eval_metrics["mean_knowledge"]
                     eval_str = (
                         f" | Eval Loss: {eval_metrics['loss']:.4f} | "
@@ -833,6 +879,9 @@ class YodaTrainer:
                             "eval/accuracy", epoch_record["eval_accuracy"], epoch
                         )
                         self.writer.add_scalar(
+                            "eval/macro_accuracy", epoch_record["macro_accuracy"], epoch
+                        )
+                        self.writer.add_scalar(
                             "eval/mean_knowledge", epoch_record["eval_mean_knowledge"], epoch
                         )
                     self.writer.flush()
@@ -856,16 +905,21 @@ class YodaTrainer:
 
                 # Checkpointing & Early Stopping
                 if eval_loader is not None:
-                    # Collapse pruning: abort early if model collapsed to majority baseline
+                    # Collapse pruning: abort early if the model collapsed to the
+                    # const-predictor baseline. Keys on macro_accuracy (the HPO
+                    # objective) so per-source positional bias cannot mask collapse.
+                    collapse_metric = epoch_record.get(
+                        "macro_accuracy", epoch_record["eval_accuracy"]
+                    )
                     if (
                         self.collapse_threshold is not None
                         and epoch >= self.collapse_patience_epochs
-                        and epoch_record["eval_accuracy"] <= self.collapse_threshold
+                        and collapse_metric <= self.collapse_threshold
                     ):
                         logger.warning(
-                            "Collapse pruning triggered: eval_acc ({:.4f}) <= threshold ({:.4f}) "
-                            "at epoch {}. Aborting collapsed trial early.",
-                            epoch_record["eval_accuracy"],
+                            "Collapse pruning triggered: macro_accuracy ({:.4f}) <= threshold "
+                            "({:.4f}) at epoch {}. Aborting collapsed trial early.",
+                            collapse_metric,
                             self.collapse_threshold,
                             epoch,
                         )

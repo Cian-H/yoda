@@ -237,6 +237,7 @@ class YodaDecisionEngine(nn.Module):
         d_hidden_multiplier: float = 2.0,
         residual_weight: float = 0.15,
         dropout: float = 0.0,
+        logit_scale: float = 8.0,
         use_candidate_affinity: bool = False,
         use_context_cache: bool = True,
         device: torch.device | None = None,
@@ -257,6 +258,8 @@ class YodaDecisionEngine(nn.Module):
             d_hidden_multiplier: Multiplier for FFN hidden dimensionality.
             residual_weight: Interpolation weight alpha for convex combination residual joins.
             dropout: Dropout probability for reasoning transformer blocks and FFN.
+            logit_scale: Ranking temperature applied to bilinear candidate-alignment
+                logits (ADR-0019).
             use_candidate_affinity: If True, uses dynamic bilateral candidate affinity scoring.
             use_context_cache: If True, independent evaluation deduplicates shared
                 (query, state, task) contexts within a batch and memoizes their pooled
@@ -276,6 +279,7 @@ class YodaDecisionEngine(nn.Module):
         self.d_hidden_multiplier = d_hidden_multiplier
         self.residual_weight = residual_weight
         self.dropout = dropout
+        self.logit_scale = float(logit_scale)
         self.use_candidate_affinity = use_candidate_affinity
         self.use_context_cache = use_context_cache
         # Maps (query, state, task) context keys to pooled epistemic states.
@@ -364,6 +368,7 @@ class YodaDecisionEngine(nn.Module):
         self.decision_head = BelnapDecisionHead(
             d_model=effective_dim,
             num_choices=num_choices,
+            logit_scale=logit_scale,
             device=device,
             dtype=dtype,
         )
@@ -371,6 +376,7 @@ class YodaDecisionEngine(nn.Module):
             self.scalar_head = BelnapDecisionHead(
                 d_model=effective_dim,
                 num_choices=1,
+                logit_scale=logit_scale,
                 device=device,
                 dtype=dtype,
             )
@@ -392,6 +398,7 @@ class YodaDecisionEngine(nn.Module):
                 "d_hidden_multiplier": d_hidden_multiplier,
                 "residual_weight": residual_weight,
                 "dropout": dropout,
+                "logit_scale": logit_scale,
             },
         )
 
