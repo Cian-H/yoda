@@ -465,11 +465,14 @@ def build_base_study_parser(
         default=None,
         help="Name of the Optuna study (default: auto-generated timestamped name)",
     )
+    # argparse help strings use %-formatting: escape literal percent signs so a
+    # storage URL containing percent-encoded characters cannot break the parser.
+    storage_help = default_storage.replace("%", "%%")
     parser.add_argument(
         "--storage",
         type=str,
         default=None,
-        help=f"Database storage URL (default: {default_storage})",
+        help=f"Database storage URL (default: {storage_help})",
     )
     parser.add_argument(
         "--heartbeat-interval",

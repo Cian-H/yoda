@@ -210,7 +210,11 @@ def main() -> None:
     for raw in (args.train_input, args.eval_input):
         path = Path(raw)
         if not path.exists():
-            raise SystemExit(f"Input not found: {path} (run the ETL first)")
+            raise SystemExit(
+                f"Input not found: {path}. The processed parquet inputs are "
+                "gitignored derived data — transfer them from a prepared host (or "
+                "run the ETL from data/raw where available)."
+            )
         frames.append(pl.read_parquet(path))
         inputs.append(str(path))
     pool = pl.concat(frames)

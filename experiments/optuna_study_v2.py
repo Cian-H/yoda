@@ -323,7 +323,12 @@ def main() -> None:
         default_batch_size=8,
         default_early_stopping_patience=2,
         default_study_patience=40 if phase == "broad" else 0,
-        default_storage=resolve_storage(None),
+        # Static, credential-free help text: the real storage URL (which may contain
+        # percent-encoded characters and credentials) must never reach --help output.
+        default_storage=(
+            f"{DEFAULT_STORAGE} (local default; set YODA_OPTUNA_STORAGE or pass --storage "
+            "for remote)"
+        ),
     )
     parser.add_argument("--phase", default=phase, choices=sorted(PHASE_PRESETS))
     parser.add_argument(
@@ -356,8 +361,10 @@ def main() -> None:
     ):
         if path is None or not Path(path).exists():
             raise SystemExit(
-                f"{label} dataset not found: {path!r}. Run "
-                "`uv run python experiments/prepare_hpo_split.py` first, or pass "
+                f"{label} dataset not found: {path!r}. The v2 splits are derived, "
+                "gitignored data: transfer data/processed/v2/ from a prepared host, "
+                "or copy data/processed/train.parquet + eval.parquet and run "
+                "`uv run python experiments/prepare_hpo_split.py`. Alternatively pass "
                 f"an explicit {flag}."
             )
     if phase == "validate" and (args.test_path is None or not Path(args.test_path).exists()):

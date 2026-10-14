@@ -41,10 +41,16 @@ def main() -> None:
     parser.add_argument("--no-write", action="store_true", help="Print only; write nothing")
     args = parser.parse_args()
 
+    names = optuna.study.get_all_study_names(storage=args.storage)
     if args.study_name:
+        if args.study_name not in names:
+            available = ", ".join(names) if names else "(none)"
+            raise SystemExit(
+                f"Study {args.study_name!r} not found in storage {args.storage!r}. "
+                f"Available studies: {available}. Check --storage / YODA_OPTUNA_STORAGE."
+            )
         study = optuna.load_study(study_name=args.study_name, storage=args.storage)
     else:
-        names = optuna.study.get_all_study_names(storage=args.storage)
         if not names:
             raise SystemExit(f"No studies found in storage {args.storage}")
         study = optuna.load_study(study_name=names[-1], storage=args.storage)

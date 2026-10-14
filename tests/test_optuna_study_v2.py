@@ -218,6 +218,20 @@ def test_resolve_storage_prefers_flag_then_env_then_local(
     assert v2.resolve_storage("sqlite:///data/explicit.db") == "sqlite:///data/explicit.db"
 
 
+def test_main_help_safe_with_percent_storage_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """--help must not crash or leak the storage URL when YODA_OPTUNA_STORAGE has %-chars."""
+    monkeypatch.setenv("YODA_OPTUNA_STORAGE", "postgresql+psycopg://u:p%40ss@host/db")
+    monkeypatch.setattr("sys.argv", ["optuna_study_v2.py", "--help"])
+    with pytest.raises(SystemExit) as exc_info:
+        v2.main()
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "p%40ss" not in out  # no credentialed URL in help output
+    assert "YODA_OPTUNA_STORAGE" in out
+
+
 def test_main_fails_fast_when_split_files_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

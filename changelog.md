@@ -77,6 +77,15 @@ All notable changes to this project will be documented in this file. The format 
 - `optuna_study_v2.py` fails fast at startup when the v2 split files are missing
   (validate phase likewise requires the locked test split) instead of pruning
   every trial against non-existent paths.
+- `build_base_study_parser` escapes literal `%` in the storage help string
+  (argparse %-formatting crashed on storage URLs with percent-encoded
+  characters), and the v2 study passes a static, credential-free
+  default-storage help string.
+- `experiments/analyze_study.py` reports the available study names instead of a
+  raw `KeyError` when `--study-name` is not found in the storage.
+- The v2 study fail-fast message and `prepare_hpo_split.py`'s missing-input error
+  now name the gitignored-data transfer step (transfer `data/processed/v2/` or
+  copy the processed parquet inputs) instead of only "run the ETL first".
 ### Security
 
 ## [2026.10.0] — 2026-10-01

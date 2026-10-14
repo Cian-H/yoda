@@ -284,6 +284,16 @@ def test_extract_metric_value() -> None:
     assert extract_metric_value([], agg="best") == 0.0
 
 
+def test_build_base_study_parser_storage_help_escapes_percent() -> None:
+    """A storage URL with percent-encoded characters must not break argparse help."""
+    parser = build_base_study_parser(
+        "Test", default_storage="postgresql+psycopg://u:p%40ss@host/db"
+    )
+    args = parser.parse_args([])
+    assert args.storage is None
+    assert "p%40ss@host" in parser.format_help()
+
+
 def test_build_base_study_parser_explicit_paths() -> None:
     """Verify the parser exposes explicit eval/test dataset paths."""
     parser = build_base_study_parser("Test")
